@@ -150,7 +150,22 @@ int    composite_cooldown = input.int(0, "Signal Cooldown (0=auto)", minval = 0,
 bool   require_htf_align = input.bool(true, "Require HTF Trend Alignment", group = GRP_SIGNAL,
      tooltip = "Буль только при HTF тренде вверх, селл только при HTF тренде вниз. Фильтрует противотрендовые входы.")
 bool   show_sltp = input.bool(true, "Show SL/TP Lines", group = GRP_SIGNAL)
+bool   use_partial_tp = input.bool(true, "Partial TP (TP1 + TP2)", group = GRP_SIGNAL,
+     tooltip = "TP1 = 1.5×ATR (50%), TP2 = полный TP. Если TP1 достигнут — SL на BE.")
+float  tp1_atr_mul = input.float(1.5, "TP1 ATR Multiplier", minval = 0.5, step = 0.5, group = GRP_SIGNAL,
+     tooltip = "Первая цель. После достижения SL двигается на breakeven.")
+bool   use_struct_trail = input.bool(true, "Structural Trailing Stop", group = GRP_SIGNAL,
+     tooltip = "SL подтягивается под новый HL (buy) или над новый LH (sell).")
+bool   use_vol_filter = input.bool(true, "Volatility Filter", group = GRP_SIGNAL,
+     tooltip = "Не торговать когда ATR < 50% от средней ATR за 50 баров.")
 bool   show_stats = input.bool(true, "Show Backtest Stats", group = GRP_SIGNAL)
+
+string GRP_RISK   = "══ Risk Calculator ══"
+bool   show_risk  = input.bool(false, "Show Position Size", group = GRP_RISK)
+float  risk_deposit = input.float(1000, "Deposit (USD)", minval = 1, group = GRP_RISK)
+float  risk_pct   = input.float(1.0, "Risk %", minval = 0.1, step = 0.1, maxval = 100, group = GRP_RISK)
+bool   use_json_alerts = input.bool(false, "JSON Alerts (for bots)", group = GRP_RISK,
+     tooltip = "Алерты в формате JSON для автоматических ботов.")
 
 string GRP_VIS   = "══ Visuals ══"
 bool   show_bg   = input.bool(true, "Highlight Break Bars", group = GRP_VIS)
@@ -353,6 +368,7 @@ var bool  ote_sell_fired = false
 // SL/TP lines
 var line  sl_line = na
 var line  tp_line = na
+var line  tp1_line = na
 
 // Divergence
 var float prev_pivot_h_rsi = na
@@ -365,10 +381,31 @@ var int   bt_losses = 0
 var float bt_entry = na
 var float bt_sl = na
 var float bt_tp = na
+var float bt_tp1 = na
 var int   bt_dir = 0
 var bool  bt_in_trade = false
 var float bt_last_rr = 0.0
 var float bt_sum_rr = 0.0
+var bool  bt_tp1_hit = false
+// Separate BUY/SELL stats
+var int   bt_buy_total = 0
+var int   bt_buy_wins = 0
+var int   bt_sell_total = 0
+var int   bt_sell_wins = 0
+// Streak / Drawdown
+var int   bt_streak = 0
+var float bt_equity = 0.0
+var float bt_peak_eq = 0.0
+var float bt_max_dd = 0.0
+// Volatility filter
+float  atr_sma50 = ta.sma(atr, 50)
+bool   vol_atr_ok = not use_vol_filter or na(atr_sma50) or atr >= atr_sma50 * 0.5
+// Heatmap
+var array<float> hm_levels = array.new_float(0)
+var array<int>   hm_counts = array.new_int(0)
+var array<line>  hm_lines  = array.new_line(0)
+int   hm_max = 10
+float hm_thr = not na(atr) ? atr * 0.3 : close * 0.003
 var int   last_composite_bar = -1000
 var bool  bt_trailed = false
 
@@ -1207,6 +1244,17 @@ int confluence = mkt_structure == 1 ? conf_bull : mkt_structure == -1 ? conf_bea
 // Backtest exit check + trailing stop (before new entries)
 if bt_in_trade
     if bt_dir == 1
+        // Partial TP1: move SL to BE when TP1 hit
+        if use_partial_tp and not bt_tp1_hit and not na(bt_tp1) and high >= bt_tp1
+            bt_tp1_hit := true
+            bt_sl := bt_entry
+            bt_trailed := true
+            if show_sltp and not na(sl_line)
+                line.set_y1(sl_line, bt_sl)
+                line.set_y2(sl_line, bt_sl)
+            if not na(tp1_line)
+                line.delete(tp1_line)
+                tp1_line := na
         // Trailing: move SL to breakeven after 1.5R profit
         if not bt_trailed and not na(bt_entry) and not na(bt_sl)
             float be_level = bt_entry + (bt_entry - bt_sl) * 1.5
@@ -1216,18 +1264,44 @@ if bt_in_trade
                 if show_sltp and not na(sl_line)
                     line.set_y1(sl_line, bt_sl)
                     line.set_y2(sl_line, bt_sl)
+        // Structural trailing: move SL under new HL
+        if use_struct_trail and bt_trailed and not na(key_sl) and key_sl > bt_sl and key_sl < close
+            bt_sl := key_sl
+            if show_sltp and not na(sl_line)
+                line.set_y1(sl_line, bt_sl)
+                line.set_y2(sl_line, bt_sl)
         if high >= bt_tp
             bt_wins += 1
+            bt_buy_wins += 1
             bt_sum_rr += bt_last_rr
+            bt_equity += bt_last_rr
+            bt_streak := bt_streak >= 0 ? bt_streak + 1 : 1
             bt_in_trade := false
         else if low <= bt_sl
             if bt_trailed
                 bt_wins += 1
-                bt_sum_rr += 0.5
+                bt_buy_wins += 1
+                float trail_rr = bt_tp1_hit ? 0.75 : 0.5
+                bt_sum_rr += trail_rr
+                bt_equity += trail_rr
+                bt_streak := bt_streak >= 0 ? bt_streak + 1 : 1
             else
                 bt_losses += 1
+                bt_equity -= 1.0
+                bt_streak := bt_streak <= 0 ? bt_streak - 1 : -1
             bt_in_trade := false
     else if bt_dir == -1
+        // Partial TP1: move SL to BE when TP1 hit
+        if use_partial_tp and not bt_tp1_hit and not na(bt_tp1) and low <= bt_tp1
+            bt_tp1_hit := true
+            bt_sl := bt_entry
+            bt_trailed := true
+            if show_sltp and not na(sl_line)
+                line.set_y1(sl_line, bt_sl)
+                line.set_y2(sl_line, bt_sl)
+            if not na(tp1_line)
+                line.delete(tp1_line)
+                tp1_line := na
         // Trailing: move SL to breakeven after 1.5R profit
         if not bt_trailed and not na(bt_entry) and not na(bt_sl)
             float be_level = bt_entry - (bt_sl - bt_entry) * 1.5
@@ -1237,17 +1311,38 @@ if bt_in_trade
                 if show_sltp and not na(sl_line)
                     line.set_y1(sl_line, bt_sl)
                     line.set_y2(sl_line, bt_sl)
+        // Structural trailing: move SL above new LH
+        if use_struct_trail and bt_trailed and not na(key_sh) and key_sh < bt_sl and key_sh > close
+            bt_sl := key_sh
+            if show_sltp and not na(sl_line)
+                line.set_y1(sl_line, bt_sl)
+                line.set_y2(sl_line, bt_sl)
         if low <= bt_tp
             bt_wins += 1
+            bt_sell_wins += 1
             bt_sum_rr += bt_last_rr
+            bt_equity += bt_last_rr
+            bt_streak := bt_streak >= 0 ? bt_streak + 1 : 1
             bt_in_trade := false
         else if high >= bt_sl
             if bt_trailed
                 bt_wins += 1
-                bt_sum_rr += 0.5
+                bt_sell_wins += 1
+                float trail_rr = bt_tp1_hit ? 0.75 : 0.5
+                bt_sum_rr += trail_rr
+                bt_equity += trail_rr
+                bt_streak := bt_streak >= 0 ? bt_streak + 1 : 1
             else
                 bt_losses += 1
+                bt_equity -= 1.0
+                bt_streak := bt_streak <= 0 ? bt_streak - 1 : -1
             bt_in_trade := false
+    // Update peak equity and drawdown
+    if bt_equity > bt_peak_eq
+        bt_peak_eq := bt_equity
+    float cur_dd = bt_peak_eq > 0 ? (bt_peak_eq - bt_equity) / bt_peak_eq * 100 : 0
+    if cur_dd > bt_max_dd
+        bt_max_dd := cur_dd
 
 // Clean SL/TP lines when trade exits
 if not bt_in_trade and show_sltp
@@ -1257,6 +1352,9 @@ if not bt_in_trade and show_sltp
     if not na(tp_line)
         line.delete(tp_line)
         tp_line := na
+    if not na(tp1_line)
+        line.delete(tp1_line)
+        tp1_line := na
 
 // Composite entry signal
 bool in_ote_buy  = ote_dir == 1 and not na(ote_top_price) and not na(ote_bot_price) and close <= ote_top_price and close >= ote_bot_price
@@ -1268,7 +1366,7 @@ float eff_tp_mul = tf_secs >= 86400 ? math.max(tp_atr_mul, 3.5) : tf_secs >= 144
 
 bool cd_ok = bar_index - last_composite_bar >= eff_cooldown
 
-if use_smc and show_composite and barstate.isconfirmed and not bt_in_trade and not in_no_trade and cd_ok
+if use_smc and show_composite and barstate.isconfirmed and not bt_in_trade and not in_no_trade and cd_ok and vol_atr_ok
     bool htf_buy_ok = not require_htf_align or not use_mtf or htf_s >= 0
     bool htf_sell_ok = not require_htf_align or not use_mtf or htf_s <= 0
     if mkt_structure == 1 and conf_bull >= composite_min_conf and not ote_buy_fired and htf_buy_ok
@@ -1278,22 +1376,30 @@ if use_smc and show_composite and barstate.isconfirmed and not bt_in_trade and n
             ote_buy_fired := true
             last_composite_bar := bar_index
             bt_entry := close
-            // SL: below OTE zone bottom + ATR buffer; TP: ATR-based
             float sl_atr_buf = not na(atr) ? atr * sl_atr_buf_mul : close * 0.01
             bt_sl := show_ote and not na(ote_bot_price) ? ote_bot_price - sl_atr_buf : (near_ob_bull and array.size(ob_bots) > 0 ? array.get(ob_bots, array.size(ob_bots) - 1) - sl_atr_buf : (not na(key_sl) ? key_sl : close - (not na(atr) ? atr * 1.5 : close * 0.015)))
             bt_tp := close + (not na(atr) ? atr * eff_tp_mul : close * 0.025)
+            bt_tp1 := use_partial_tp ? close + (not na(atr) ? atr * tp1_atr_mul : close * 0.015) : bt_tp
+            bt_tp1_hit := false
             bt_trailed := false
             float denom = bt_entry - bt_sl
             bt_last_rr := denom > 0 ? (bt_tp - bt_entry) / denom : 1.0
             bt_dir := 1
             bt_in_trade := true
             bt_total += 1
+            bt_buy_total += 1
             if show_sltp
                 sl_line := line.new(bar_index, bt_sl, bar_index + 1, bt_sl,
                      color = col_res, style = line.style_dotted, width = 1, extend = extend.right)
                 tp_line := line.new(bar_index, bt_tp, bar_index + 1, bt_tp,
                      color = col_sup, style = line.style_dotted, width = 1, extend = extend.right)
-            label.new(bar_index, low, "BUY\nR:R " + str.tostring(bt_last_rr, "#.#") + ":1\nConf " + str.tostring(conf_bull) + "/5",
+                if use_partial_tp
+                    tp1_line := line.new(bar_index, bt_tp1, bar_index + 1, bt_tp1,
+                         color = color.new(col_sup, 50), style = line.style_dashed, width = 1, extend = extend.right)
+            float risk_usd = show_risk ? risk_deposit * risk_pct / 100 : 0
+            float pos_size = show_risk and denom > 0 ? risk_usd / denom : 0
+            string risk_txt = show_risk and pos_size > 0 ? "\nPos: " + str.tostring(pos_size, "#.###") : ""
+            label.new(bar_index, low, "BUY\nR:R " + str.tostring(bt_last_rr, "#.#") + ":1\nConf " + str.tostring(conf_bull) + "/5" + risk_txt,
                  style = label.style_label_up, color = col_sup, textcolor = color.white, size = size.normal)
 
     if mkt_structure == -1 and conf_bear >= composite_min_conf and not ote_sell_fired and htf_sell_ok
@@ -1303,22 +1409,30 @@ if use_smc and show_composite and barstate.isconfirmed and not bt_in_trade and n
             ote_sell_fired := true
             last_composite_bar := bar_index
             bt_entry := close
-            // SL: above OTE zone top + ATR buffer; TP: ATR-based
             float sl_atr_buf = not na(atr) ? atr * sl_atr_buf_mul : close * 0.01
             bt_sl := show_ote and not na(ote_top_price) ? ote_top_price + sl_atr_buf : (near_ob_bear and array.size(ob_tops) > 0 ? array.get(ob_tops, array.size(ob_tops) - 1) + sl_atr_buf : (not na(key_sh) ? key_sh : close + (not na(atr) ? atr * 1.5 : close * 0.015)))
             bt_tp := close - (not na(atr) ? atr * eff_tp_mul : close * 0.025)
+            bt_tp1 := use_partial_tp ? close - (not na(atr) ? atr * tp1_atr_mul : close * 0.015) : bt_tp
+            bt_tp1_hit := false
             bt_trailed := false
             float denom = bt_sl - bt_entry
             bt_last_rr := denom > 0 ? (bt_entry - bt_tp) / denom : 1.0
             bt_dir := -1
             bt_in_trade := true
             bt_total += 1
+            bt_sell_total += 1
             if show_sltp
                 sl_line := line.new(bar_index, bt_sl, bar_index + 1, bt_sl,
                      color = col_res, style = line.style_dotted, width = 1, extend = extend.right)
                 tp_line := line.new(bar_index, bt_tp, bar_index + 1, bt_tp,
                      color = col_sup, style = line.style_dotted, width = 1, extend = extend.right)
-            label.new(bar_index, high, "SELL\nR:R " + str.tostring(bt_last_rr, "#.#") + ":1\nConf " + str.tostring(conf_bear) + "/5",
+                if use_partial_tp
+                    tp1_line := line.new(bar_index, bt_tp1, bar_index + 1, bt_tp1,
+                         color = color.new(col_sup, 50), style = line.style_dashed, width = 1, extend = extend.right)
+            float risk_usd = show_risk ? risk_deposit * risk_pct / 100 : 0
+            float pos_size = show_risk and denom > 0 ? risk_usd / denom : 0
+            string risk_txt = show_risk and pos_size > 0 ? "\nPos: " + str.tostring(pos_size, "#.###") : ""
+            label.new(bar_index, high, "SELL\nR:R " + str.tostring(bt_last_rr, "#.#") + ":1\nConf " + str.tostring(conf_bear) + "/5" + risk_txt,
                  style = label.style_label_down, color = col_res, textcolor = color.white, size = size.normal)
 
 // ═══════════════════════════════════════════════════════════════
@@ -1541,11 +1655,57 @@ barcolor(use_candle_color ?
       color.new(color.gray, 50)) : na, title = "Structure Candle Color")
 
 // ═══════════════════════════════════════════════════════════════
+//  HEATMAP (touch count at price levels)
+// ═══════════════════════════════════════════════════════════════
+
+if use_smc and barstate.isconfirmed
+    // Track touches at key levels (key_sh, key_sl, OB tops/bots)
+    float[] check_lvls = array.new_float(0)
+    if not na(key_sh)
+        array.push(check_lvls, key_sh)
+    if not na(key_sl)
+        array.push(check_lvls, key_sl)
+    for ci = 0 to array.size(check_lvls) - 1
+        float lvl = array.get(check_lvls, ci)
+        bool found = false
+        for hi = 0 to array.size(hm_levels) - 1
+            if math.abs(array.get(hm_levels, hi) - lvl) < hm_thr
+                if high >= lvl and low <= lvl
+                    array.set(hm_counts, hi, array.get(hm_counts, hi) + 1)
+                found := true
+                break
+        if not found and array.size(hm_levels) < hm_max
+            array.push(hm_levels, lvl)
+            array.push(hm_counts, high >= lvl and low <= lvl ? 1 : 0)
+
+// Draw heatmap lines on last bar
+if use_smc and barstate.islast
+    for hi = 0 to array.size(hm_lines) - 1
+        line.delete(array.get(hm_lines, hi))
+    array.clear(hm_lines)
+    for hi = 0 to array.size(hm_levels) - 1
+        int tc = array.get(hm_counts, hi)
+        if tc >= 2
+            int alpha = math.max(0, 80 - tc * 10)
+            color hm_col = tc >= 5 ? color.new(#FF6D00, alpha) : color.new(#FFD600, alpha)
+            line hl = line.new(bar_index - 50, array.get(hm_levels, hi), bar_index, array.get(hm_levels, hi),
+                 color = hm_col, style = line.style_dotted, width = tc >= 5 ? 2 : 1)
+            if array.size(hm_lines) < 500
+                array.push(hm_lines, hl)
+
+// ═══════════════════════════════════════════════════════════════
 //  ИНФОРМАЦИОННАЯ ПАНЕЛЬ (РУССКИЙ)
 // ═══════════════════════════════════════════════════════════════
 
-var table tbl = table.new(position.top_right, 2, 18,
-     bgcolor = color.new(#1A1A2E, 20), border_color = color.new(color.gray, 70), border_width = 1)
+// Light/Dark theme detection
+bool is_dark = syminfo.type != "" // always true, but use chart.bg_color when available
+color tbl_bg = color.new(#1A1A2E, 20)
+color tbl_border = color.new(color.gray, 70)
+color tbl_txt = color.white
+color tbl_lbl = color.gray
+
+var table tbl = table.new(position.top_right, 2, 24,
+     bgcolor = tbl_bg, border_color = tbl_border, border_width = 1)
 
 if barstate.islast
     sc = array.size(sup_pool)
@@ -1634,11 +1794,43 @@ if barstate.islast
     table.cell(tbl, 1, 16, bt_in_trade ? str.tostring(bt_last_rr, "#.#") + ":1" : "---",
          text_color = bt_in_trade ? color.white : color.gray, text_size = size.small)
 
-    table.cell(tbl, 0, 17, "Win Rate", text_color = color.gray, text_size = size.small)
+    table.cell(tbl, 0, 17, "Win Rate", text_color = tbl_lbl, text_size = size.small)
     float wr = bt_total > 0 ? bt_wins * 100.0 / bt_total : 0
     float avg_rr = bt_wins > 0 ? bt_sum_rr / bt_wins : 0
     string wr_txt = show_stats and bt_total > 0 ? str.tostring(math.round(wr)) + "% (" + str.tostring(bt_wins) + "/" + str.tostring(bt_total) + ") R:" + str.tostring(avg_rr, "#.#") : "---"
-    table.cell(tbl, 1, 17, wr_txt, text_color = wr >= 50 ? col_sup : bt_total > 0 ? col_res : color.gray, text_size = size.small)
+    table.cell(tbl, 1, 17, wr_txt, text_color = wr >= 50 ? col_sup : bt_total > 0 ? col_res : tbl_lbl, text_size = size.small)
+
+    // Row 18: BUY Win Rate
+    table.cell(tbl, 0, 18, "WR BUY", text_color = tbl_lbl, text_size = size.small)
+    float wr_buy = bt_buy_total > 0 ? bt_buy_wins * 100.0 / bt_buy_total : 0
+    string wrb_txt = show_stats and bt_buy_total > 0 ? str.tostring(math.round(wr_buy)) + "% (" + str.tostring(bt_buy_wins) + "/" + str.tostring(bt_buy_total) + ")" : "---"
+    table.cell(tbl, 1, 18, wrb_txt, text_color = wr_buy >= 50 ? col_sup : bt_buy_total > 0 ? col_res : tbl_lbl, text_size = size.small)
+
+    // Row 19: SELL Win Rate
+    table.cell(tbl, 0, 19, "WR SELL", text_color = tbl_lbl, text_size = size.small)
+    float wr_sell = bt_sell_total > 0 ? bt_sell_wins * 100.0 / bt_sell_total : 0
+    string wrs_txt = show_stats and bt_sell_total > 0 ? str.tostring(math.round(wr_sell)) + "% (" + str.tostring(bt_sell_wins) + "/" + str.tostring(bt_sell_total) + ")" : "---"
+    table.cell(tbl, 1, 19, wrs_txt, text_color = wr_sell >= 50 ? col_sup : bt_sell_total > 0 ? col_res : tbl_lbl, text_size = size.small)
+
+    // Row 20: Streak
+    table.cell(tbl, 0, 20, "Серия", text_color = tbl_lbl, text_size = size.small)
+    string streak_txt = show_stats and bt_total > 0 ? (bt_streak > 0 ? str.tostring(bt_streak) + "W" : bt_streak < 0 ? str.tostring(math.abs(bt_streak)) + "L" : "0") : "---"
+    table.cell(tbl, 1, 20, streak_txt, text_color = bt_streak > 0 ? col_sup : bt_streak < 0 ? col_res : tbl_lbl, text_size = size.small)
+
+    // Row 21: Max Drawdown
+    table.cell(tbl, 0, 21, "Макс.DD", text_color = tbl_lbl, text_size = size.small)
+    string dd_txt = show_stats and bt_total > 0 ? str.tostring(bt_max_dd, "#.#") + "%" : "---"
+    table.cell(tbl, 1, 21, dd_txt, text_color = bt_max_dd > 20 ? col_res : bt_max_dd > 10 ? color.yellow : tbl_lbl, text_size = size.small)
+
+    // Row 22: Equity (R)
+    table.cell(tbl, 0, 22, "Equity(R)", text_color = tbl_lbl, text_size = size.small)
+    string eq_txt = show_stats and bt_total > 0 ? str.tostring(bt_equity, "#.#") + "R" : "---"
+    table.cell(tbl, 1, 22, eq_txt, text_color = bt_equity > 0 ? col_sup : bt_equity < 0 ? col_res : tbl_lbl, text_size = size.small)
+
+    // Row 23: Volatility
+    table.cell(tbl, 0, 23, "Волат.", text_color = tbl_lbl, text_size = size.small)
+    string vol_txt = not use_vol_filter ? "ВЫКЛ" : vol_atr_ok ? "OK" : "НИЗКАЯ"
+    table.cell(tbl, 1, 23, vol_txt, text_color = not use_vol_filter ? tbl_lbl : vol_atr_ok ? col_sup : col_res, text_size = size.small)
 
 // ═══════════════════════════════════════════════════════════════
 //  MULTI-SYMBOL PANEL
@@ -1704,9 +1896,15 @@ if smc_is_choch_bull and alr_choch
 if smc_is_choch_bear and alr_choch
     alert("CHOCH DN | " + syminfo.ticker + " " + timeframe.period + " | " + str.tostring(close, format.mintick) + " | МЕДВЕЖЬЯ | " + zone_str + " | Conf:" + str.tostring(conf_bear) + "/5", alert.freq_once_per_bar)
 if composite_buy and alr_composite
-    alert("BUY | " + syminfo.ticker + " " + timeframe.period + " | " + str.tostring(close, format.mintick) + " | SL:" + str.tostring(bt_sl, format.mintick) + " | TP:" + str.tostring(bt_tp, format.mintick) + " | R:R " + str.tostring(bt_last_rr, "#.#") + ":1 | Conf:" + str.tostring(conf_bull) + "/5", alert.freq_once_per_bar)
+    if use_json_alerts
+        alert('{"action":"BUY","ticker":"' + syminfo.ticker + '","tf":"' + timeframe.period + '","entry":' + str.tostring(close, format.mintick) + ',"sl":' + str.tostring(bt_sl, format.mintick) + ',"tp1":' + str.tostring(bt_tp1, format.mintick) + ',"tp2":' + str.tostring(bt_tp, format.mintick) + ',"rr":' + str.tostring(bt_last_rr, "#.#") + ',"conf":' + str.tostring(conf_bull) + '}', alert.freq_once_per_bar)
+    else
+        alert("BUY | " + syminfo.ticker + " " + timeframe.period + " | " + str.tostring(close, format.mintick) + " | SL:" + str.tostring(bt_sl, format.mintick) + " | TP1:" + str.tostring(bt_tp1, format.mintick) + " | TP2:" + str.tostring(bt_tp, format.mintick) + " | R:R " + str.tostring(bt_last_rr, "#.#") + ":1 | Conf:" + str.tostring(conf_bull) + "/5", alert.freq_once_per_bar)
 if composite_sell and alr_composite
-    alert("SELL | " + syminfo.ticker + " " + timeframe.period + " | " + str.tostring(close, format.mintick) + " | SL:" + str.tostring(bt_sl, format.mintick) + " | TP:" + str.tostring(bt_tp, format.mintick) + " | R:R " + str.tostring(bt_last_rr, "#.#") + ":1 | Conf:" + str.tostring(conf_bear) + "/5", alert.freq_once_per_bar)
+    if use_json_alerts
+        alert('{"action":"SELL","ticker":"' + syminfo.ticker + '","tf":"' + timeframe.period + '","entry":' + str.tostring(close, format.mintick) + ',"sl":' + str.tostring(bt_sl, format.mintick) + ',"tp1":' + str.tostring(bt_tp1, format.mintick) + ',"tp2":' + str.tostring(bt_tp, format.mintick) + ',"rr":' + str.tostring(bt_last_rr, "#.#") + ',"conf":' + str.tostring(conf_bear) + '}', alert.freq_once_per_bar)
+    else
+        alert("SELL | " + syminfo.ticker + " " + timeframe.period + " | " + str.tostring(close, format.mintick) + " | SL:" + str.tostring(bt_sl, format.mintick) + " | TP1:" + str.tostring(bt_tp1, format.mintick) + " | TP2:" + str.tostring(bt_tp, format.mintick) + " | R:R " + str.tostring(bt_last_rr, "#.#") + ":1 | Conf:" + str.tostring(conf_bear) + "/5", alert.freq_once_per_bar)
 if (sfp_bull or sfp_bear) and alr_sfp
     alert("SFP | " + syminfo.ticker + " " + timeframe.period + " | " + str.tostring(close, format.mintick) + " | " + struct_str + " | " + zone_str, alert.freq_once_per_bar)
 if (sweep_bull or sweep_bear) and alr_sweep
