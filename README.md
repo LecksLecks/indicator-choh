@@ -14,6 +14,8 @@ int    swing_len = input.int(5, "Slow Swing Length", minval = 2, maxval = 50, gr
      tooltip = "Для подтверждённых линий. Быстрые используют половину.")
 bool   use_fast  = input.bool(true, "Fast Lines (early signals)", group = GRP_SWING,
      tooltip = "Линии по пивотам с половинной длиной — раньше видят разворот.")
+bool   auto_swing_len = input.bool(true, "Auto Scale by Timeframe", group = GRP_SWING,
+     tooltip = "Автомасштаб: 1H→10, 4H→8, 15m→8. Отключите для ручного управления.")
 
 // ═══════════════════════════════════════════════════════════════
 //  НАСТРОЙКИ — TREND LINES
@@ -66,6 +68,10 @@ bool   show_div  = input.bool(true, "Show Divergence at Pivots", group = GRP_SMC
      tooltip = "RSI-дивергенция: цена HH но RSI LH (медвежья), цена LL но RSI HL (бычья).")
 color  col_bos   = input.color(#2962FF, "BOS Color", group = GRP_SMC)
 color  col_choch = input.color(#E040FB, "CHOCH Color", group = GRP_SMC)
+float  smc_min_swing = input.float(0.5, "Min Swing Size (ATR x)", minval = 0.0, step = 0.1, group = GRP_SMC,
+     tooltip = "Мин. размах свинга для BOS/CHOCH. 0=любой. Фильтрует шум в рейндже.")
+int    smc_min_conf  = input.int(0, "Min Confluence for Labels", minval = 0, maxval = 5, group = GRP_SMC,
+     tooltip = "BOS/CHOCH лейблы только при confluence >= этого значения. 0=все.")
 
 string GRP_DISP  = "══ Displacement ══"
 float  disp_mul  = input.float(1.5, "Displacement Body Multiplier", minval = 1.0, step = 0.1, group = GRP_DISP,
@@ -132,6 +138,8 @@ bool   show_ote  = input.bool(true, "Show OTE Zone (Fib 0.618-0.786)", group = G
      tooltip = "Optimal Trade Entry — зона отката по Фибоначчи после BOS/CHOCH.")
 bool   show_composite = input.bool(true, "Show Composite BUY/SELL", group = GRP_SIGNAL)
 int    composite_min_conf = input.int(3, "Min Confluence for Signal", minval = 1, maxval = 5, group = GRP_SIGNAL)
+int    composite_cooldown = input.int(10, "Signal Cooldown (bars)", minval = 1, maxval = 100, group = GRP_SIGNAL,
+     tooltip = "Мин. баров между composite-сигналами. Снижает частоту сигналов.")
 bool   show_sltp = input.bool(true, "Show SL/TP Lines", group = GRP_SIGNAL)
 bool   show_stats = input.bool(true, "Show Backtest Stats", group = GRP_SIGNAL)
 
@@ -186,7 +194,11 @@ fill(pEMA1, pEMA2, color = emaFast > emaSlow ? color.new(col_sup, 92) : color.ne
 trend_bear_ok = trend_mode == "Off" ? true : trend_mode == "EMA Cross" ? (emaFast < emaSlow) : (close < emaFast)
 trend_bull_ok = trend_mode == "Off" ? true : trend_mode == "EMA Cross" ? (emaFast > emaSlow) : (close > emaFast)
 
-eff_min_slope = min_slope_bars > 0 ? min_slope_bars : swing_len * 2
+// Auto swing length scaling by timeframe
+int tf_secs = timeframe.in_seconds()
+int eff_swing_len = auto_swing_len ? (tf_secs >= 86400 ? swing_len : tf_secs >= 14400 ? math.max(swing_len, 8) : tf_secs >= 3600 ? math.max(swing_len, 10) : tf_secs >= 900 ? math.max(swing_len, 8) : swing_len) : swing_len
+
+eff_min_slope = min_slope_bars > 0 ? min_slope_bars : eff_swing_len * 2
 
 avg_body = ta.sma(math.abs(close - open), 10)
 
@@ -257,7 +269,7 @@ var int pend_bull_lb  = -1
 //  СОСТОЯНИЕ — БЫСТРЫЕ ЛИНИИ
 // ═══════════════════════════════════════════════════════════════
 
-int fast_len = math.max(2, swing_len / 2)
+int fast_len = math.max(2, eff_swing_len / 2)
 
 var float[] fsh_prices = array.new_float(0)
 var int[]   fsh_bars   = array.new_int(0)
@@ -348,6 +360,7 @@ var int   bt_dir = 0
 var bool  bt_in_trade = false
 var float bt_last_rr = 0.0
 var float bt_sum_rr = 0.0
+var int   last_composite_bar = -1000
 
 // Sessions
 var float asian_hi = na
@@ -493,12 +506,12 @@ body_bear_ok(float lp) =>
 //  МЕДЛЕННЫЕ ПИВОТЫ + ЛИНИИ + SMC SWING + DIVERGENCE
 // ═══════════════════════════════════════════════════════════════
 
-pivot_h = ta.pivothigh(high, swing_len, swing_len)
-pivot_l = ta.pivotlow(low, swing_len, swing_len)
+pivot_h = ta.pivothigh(high, eff_swing_len, eff_swing_len)
+pivot_l = ta.pivotlow(low, eff_swing_len, eff_swing_len)
 
 if not na(pivot_h)
-    bh = bar_index - swing_len
-    hp = high[swing_len]
+    bh = bar_index - eff_swing_len
+    hp = high[eff_swing_len]
     array.unshift(sh_prices, hp)
     array.unshift(sh_bars, bh)
     if array.size(sh_prices) > 20
@@ -521,13 +534,13 @@ if not na(pivot_h)
     if use_smc
         bool is_hh = na(key_sh) or hp > key_sh
         // Divergence: HH in price but LH in RSI
-        if show_div and not na(prev_sh_price) and not na(prev_pivot_h_rsi) and not na(rsi_val[swing_len])
-            float cur_rsi = rsi_val[swing_len]
+        if show_div and not na(prev_sh_price) and not na(prev_pivot_h_rsi) and not na(rsi_val[eff_swing_len])
+            float cur_rsi = rsi_val[eff_swing_len]
             if hp > prev_sh_price and cur_rsi < prev_pivot_h_rsi
                 div_bear := true
                 label.new(bh, hp, "DIV", style = label.style_label_down,
                      color = color.new(col_res, 50), textcolor = col_res, size = size.tiny)
-        prev_pivot_h_rsi := rsi_val[swing_len]
+        prev_pivot_h_rsi := rsi_val[eff_swing_len]
         prev_sh_price := key_sh
         key_sh := hp
         key_sh_bar := bh
@@ -545,8 +558,8 @@ if not na(pivot_h)
                  color = color.new(sh_col, 70), textcolor = sh_col, size = size.tiny)
 
 if not na(pivot_l)
-    bl = bar_index - swing_len
-    lp = low[swing_len]
+    bl = bar_index - eff_swing_len
+    lp = low[eff_swing_len]
     array.unshift(sl_prices, lp)
     array.unshift(sl_bars, bl)
     if array.size(sl_prices) > 20
@@ -569,13 +582,13 @@ if not na(pivot_l)
     if use_smc
         bool is_hl = na(key_sl) or lp > key_sl
         // Divergence: LL in price but HL in RSI
-        if show_div and not na(prev_sl_price) and not na(prev_pivot_l_rsi) and not na(rsi_val[swing_len])
-            float cur_rsi = rsi_val[swing_len]
+        if show_div and not na(prev_sl_price) and not na(prev_pivot_l_rsi) and not na(rsi_val[eff_swing_len])
+            float cur_rsi = rsi_val[eff_swing_len]
             if lp < prev_sl_price and cur_rsi > prev_pivot_l_rsi
                 div_bull := true
                 label.new(bl, lp, "DIV", style = label.style_label_up,
                      color = color.new(col_sup, 50), textcolor = col_sup, size = size.tiny)
-        prev_pivot_l_rsi := rsi_val[swing_len]
+        prev_pivot_l_rsi := rsi_val[eff_swing_len]
         prev_sl_price := key_sl
         key_sl := lp
         key_sl_bar := bl
@@ -596,8 +609,8 @@ if not na(pivot_l)
 //  БЫСТРЫЕ ПИВОТЫ + ЛИНИИ + INDUCEMENT
 // ═══════════════════════════════════════════════════════════════
 
-f_pivot_h = use_fast and fast_len < swing_len ? ta.pivothigh(high, fast_len, fast_len) : na
-f_pivot_l = use_fast and fast_len < swing_len ? ta.pivotlow(low, fast_len, fast_len) : na
+f_pivot_h = use_fast and fast_len < eff_swing_len ? ta.pivothigh(high, fast_len, fast_len) : na
+f_pivot_l = use_fast and fast_len < eff_swing_len ? ta.pivotlow(low, fast_len, fast_len) : na
 
 if not na(f_pivot_h)
     bh = bar_index - fast_len
@@ -667,10 +680,10 @@ if not na(f_pivot_l)
             array.push(idm_prices, lp)
             array.push(idm_dirs, -1)
 
-if not na(fres_ln) and bar_index > fres_x1 + swing_len
+if not na(fres_ln) and bar_index > fres_x1 + eff_swing_len
     line.delete(fres_ln)
     fres_ln := na
-if not na(fsup_ln) and bar_index > fsup_x1 + swing_len
+if not na(fsup_ln) and bar_index > fsup_x1 + eff_swing_len
     line.delete(fsup_ln)
     fsup_ln := na
 
@@ -872,8 +885,12 @@ if use_smc and show_sfp and barstate.isconfirmed
 //  SMC: BOS / CHOCH DETECTION
 // ═══════════════════════════════════════════════════════════════
 
+// Min swing size filter — reject noise in ranging markets
+float swing_range = not na(key_sh) and not na(key_sl) ? key_sh - key_sl : 0.0
+bool swing_size_ok = smc_min_swing <= 0 or na(atr) or swing_range >= atr * smc_min_swing
+
 if use_smc and barstate.isconfirmed
-    if not na(key_sh) and not sh_broken and close > key_sh and disp_ok and mtf_bull_ok
+    if not na(key_sh) and not sh_broken and close > key_sh and disp_ok and mtf_bull_ok and swing_size_ok
         if key_sh_bar == pend_smc_bull_key
             if bar_index > pend_smc_bull_lb
                 pend_smc_bull_cnt += 1
@@ -901,7 +918,7 @@ if use_smc and barstate.isconfirmed
         pend_smc_bull_cnt := 0
         pend_smc_bull_lb  := -1
 
-    if not na(key_sl) and not sl_broken and close < key_sl and disp_ok and mtf_bear_ok
+    if not na(key_sl) and not sl_broken and close < key_sl and disp_ok and mtf_bear_ok and swing_size_ok
         if key_sl_bar == pend_smc_bear_key
             if bar_index > pend_smc_bear_lb
                 pend_smc_bear_cnt += 1
@@ -1209,14 +1226,19 @@ if not bt_in_trade and show_sltp
 bool in_ote_buy  = ote_dir == 1 and not na(ote_top_price) and not na(ote_bot_price) and close <= ote_top_price and close >= ote_bot_price
 bool in_ote_sell = ote_dir == -1 and not na(ote_top_price) and not na(ote_bot_price) and close >= ote_bot_price and close <= ote_top_price
 
-if use_smc and show_composite and barstate.isconfirmed and not bt_in_trade and not in_no_trade
+bool cd_ok = bar_index - last_composite_bar >= composite_cooldown
+
+if use_smc and show_composite and barstate.isconfirmed and not bt_in_trade and not in_no_trade and cd_ok
     if mkt_structure == 1 and conf_bull >= composite_min_conf and not ote_buy_fired
         bool ote_cond = show_ote ? in_ote_buy : (near_ob_bull or near_fvg_bull or in_discount)
         if ote_cond
             composite_buy := true
             ote_buy_fired := true
+            last_composite_bar := bar_index
             bt_entry := close
-            bt_sl := not na(key_sl) ? key_sl : close - (not na(atr) ? atr * 2 : close * 0.02)
+            // SL: below OTE zone bottom (or nearest OB bottom) + ATR buffer; TP: key_sh
+            float sl_atr_buf = not na(atr) ? atr * 0.3 : close * 0.003
+            bt_sl := show_ote and not na(ote_bot_price) ? ote_bot_price - sl_atr_buf : (near_ob_bull and array.size(ob_bots) > 0 ? array.get(ob_bots, array.size(ob_bots) - 1) - sl_atr_buf : (not na(key_sl) ? key_sl : close - (not na(atr) ? atr * 1.5 : close * 0.015)))
             bt_tp := not na(key_sh) ? key_sh : close + (not na(atr) ? atr * 3 : close * 0.03)
             float denom = bt_entry - bt_sl
             bt_last_rr := denom > 0 ? (bt_tp - bt_entry) / denom : 1.0
@@ -1236,8 +1258,11 @@ if use_smc and show_composite and barstate.isconfirmed and not bt_in_trade and n
         if ote_cond
             composite_sell := true
             ote_sell_fired := true
+            last_composite_bar := bar_index
             bt_entry := close
-            bt_sl := not na(key_sh) ? key_sh : close + (not na(atr) ? atr * 2 : close * 0.02)
+            // SL: above OTE zone top (or nearest OB top) + ATR buffer; TP: key_sl
+            float sl_atr_buf = not na(atr) ? atr * 0.3 : close * 0.003
+            bt_sl := show_ote and not na(ote_top_price) ? ote_top_price + sl_atr_buf : (near_ob_bear and array.size(ob_tops) > 0 ? array.get(ob_tops, array.size(ob_tops) - 1) + sl_atr_buf : (not na(key_sh) ? key_sh : close + (not na(atr) ? atr * 1.5 : close * 0.015)))
             bt_tp := not na(key_sl) ? key_sl : close - (not na(atr) ? atr * 3 : close * 0.03)
             float denom = bt_sl - bt_entry
             bt_last_rr := denom > 0 ? (bt_entry - bt_tp) / denom : 1.0
@@ -1390,7 +1415,7 @@ else if pend_bull_key >= 0 and bar_index > pend_bull_lb and barstate.isconfirmed
 //  БЫСТРЫЕ ЛИНИИ: ОБНАРУЖЕНИЕ ПРОБОЯ
 // ═══════════════════════════════════════════════════════════════
 
-if use_fast and fast_len < swing_len
+if use_fast and fast_len < eff_swing_len
     if not na(fsup_ln) and bar_index > fsup_cd_bar and bar_index > fsup_x1
         flp = calc_line_at(fsup_x1, fsup_y1, fsup_x2, fsup_y2, bar_index)
         fwd = low < flp - min_dist
@@ -1437,16 +1462,16 @@ bgcolor(bull_break and not bear_break and show_bg ? bg_up : na, title = "Bull BG
 bgcolor(bear_break and not bull_break and show_bg ? bg_dn : na, title = "Bear BG")
 
 // BOS/CHOCH labels with confluence
-if use_smc and show_bos and smc_is_bos_bull
+if use_smc and show_bos and smc_is_bos_bull and conf_bull >= smc_min_conf
     label.new(bar_index, low, "BOS " + str.tostring(conf_bull) + "/5",
          style = label.style_label_up, color = col_bos, textcolor = color.white, size = size.small)
-if use_smc and show_bos and smc_is_bos_bear
+if use_smc and show_bos and smc_is_bos_bear and conf_bear >= smc_min_conf
     label.new(bar_index, high, "BOS " + str.tostring(conf_bear) + "/5",
          style = label.style_label_down, color = col_bos, textcolor = color.white, size = size.small)
-if use_smc and show_choch and smc_is_choch_bull
+if use_smc and show_choch and smc_is_choch_bull and conf_bull >= smc_min_conf
     label.new(bar_index, low, "CHOCH " + str.tostring(conf_bull) + "/5",
          style = label.style_label_up, color = col_choch, textcolor = color.white, size = size.normal)
-if use_smc and show_choch and smc_is_choch_bear
+if use_smc and show_choch and smc_is_choch_bear and conf_bear >= smc_min_conf
     label.new(bar_index, high, "CHOCH " + str.tostring(conf_bear) + "/5",
          style = label.style_label_down, color = col_choch, textcolor = color.white, size = size.normal)
 
