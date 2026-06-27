@@ -88,8 +88,8 @@ rsi_bull_ok = rsi_val > 50
 rsi_bear_ok = rsi_val < 50
 
 [macd_l, macd_s, macd_h] = ta.macd(close, 12, 26, 9)
-macd_bull_ok = not na(macd_h) and (macd_h > 0 or macd_h > macd_h[1])
-macd_bear_ok = not na(macd_h) and (macd_h < 0 or macd_h < macd_h[1])
+macd_bull_ok = not na(macd_h) and macd_h > 0 and macd_h > macd_h[1]
+macd_bear_ok = not na(macd_h) and macd_h < 0 and macd_h < macd_h[1]
 
 get_mom_bull() =>
     mom_mode == "Off" or (mom_mode == "RSI" and rsi_bull_ok) or (mom_mode == "MACD" and macd_bull_ok) or (mom_mode == "Both" and rsi_bull_ok and macd_bull_ok)
@@ -149,14 +149,14 @@ var int   fsup_x1 = -1
 var float fsup_y1 = na
 var int   fsup_x2 = -1
 var float fsup_y2 = na
-var bool  fsup_cd = false
+var int   fsup_cd_bar = -1
 
 var line  fres_ln = na
 var int   fres_x1 = -1
 var float fres_y1 = na
 var int   fres_x2 = -1
 var float fres_y2 = na
-var bool  fres_cd = false
+var int   fres_cd_bar = -1
 
 bull_break = false
 bear_break = false
@@ -237,10 +237,18 @@ retire_res() =>
         array.remove(res_cd, l)
 
 body_bull_ok(float lp) =>
-    not use_body or na(avg_body) or avg_body <= 0 or (close - lp) > avg_body
+    if not use_body or na(avg_body) or avg_body <= 0
+        true
+    else
+        float src = mode == "Wick" ? high : close
+        (src - lp) > avg_body
 
 body_bear_ok(float lp) =>
-    not use_body or na(avg_body) or avg_body <= 0 or (lp - close) > avg_body
+    if not use_body or na(avg_body) or avg_body <= 0
+        true
+    else
+        float src = mode == "Wick" ? low : close
+        (lp - src) > avg_body
 
 // ═══════════════════════════════════════════════════════════════
 //  МЕДЛЕННЫЕ ПИВОТЫ + ЛИНИИ
@@ -323,7 +331,7 @@ if not na(f_pivot_h)
             fres_y1 := y1
             fres_x2 := x2
             fres_y2 := y2
-            fres_cd := true
+            fres_cd_bar := bar_index
 
 if not na(f_pivot_l)
     bl = bar_index - fast_len
@@ -346,7 +354,7 @@ if not na(f_pivot_l)
             fsup_y1 := y1
             fsup_x2 := x2
             fsup_y2 := y2
-            fsup_cd := true
+            fsup_cd_bar := bar_index
 
 if not na(fres_ln) and bar_index > fres_x1 + swing_len
     line.delete(fres_ln)
@@ -383,29 +391,39 @@ if barstate.islast and extend_r
 //  МЕДЛЕННЫЕ: ОБНАРУЖЕНИЕ ПРОБОЯ
 // ═══════════════════════════════════════════════════════════════
 
-min_dist = atr_flt * atr
+min_dist = na(atr) ? 0.0 : atr_flt * atr
 
-if pend_bear_key >= 0 and array.size(sup_pool) > 0
-    found = false
-    for i = 0 to array.size(sup_pool) - 1
-        if array.get(sup_x1, i) == pend_bear_key
-            found := true
-            break
-    if not found
+if pend_bear_key >= 0
+    if array.size(sup_pool) == 0
         pend_bear_key := -1
         pend_bear_cnt := 0
         pend_bear_lb  := -1
+    else
+        found = false
+        for i = 0 to array.size(sup_pool) - 1
+            if array.get(sup_x1, i) == pend_bear_key
+                found := true
+                break
+        if not found
+            pend_bear_key := -1
+            pend_bear_cnt := 0
+            pend_bear_lb  := -1
 
-if pend_bull_key >= 0 and array.size(res_pool) > 0
-    found = false
-    for i = 0 to array.size(res_pool) - 1
-        if array.get(res_x1, i) == pend_bull_key
-            found := true
-            break
-    if not found
+if pend_bull_key >= 0
+    if array.size(res_pool) == 0
         pend_bull_key := -1
         pend_bull_cnt := 0
         pend_bull_lb  := -1
+    else
+        found = false
+        for i = 0 to array.size(res_pool) - 1
+            if array.get(res_x1, i) == pend_bull_key
+                found := true
+                break
+        if not found
+            pend_bull_key := -1
+            pend_bull_cnt := 0
+            pend_bull_lb  := -1
 
 int   new_bear_idx = -1
 float closest_bear = na
@@ -444,7 +462,7 @@ if new_bear_idx >= 0 and vol_ok and body_bear_ok(closest_bear) and mom_bear_ok a
         pend_bear_cnt := 1
         pend_bear_lb  := bar_index
         bear_tent := true
-    if pend_bear_cnt >= eff_cb
+    if pend_bear_cnt >= eff_cb and barstate.isconfirmed
         bear_break := true
         remove_sup(new_bear_idx)
         pend_bear_key := -1
@@ -492,7 +510,7 @@ if new_bull_idx >= 0 and vol_ok and body_bull_ok(closest_bull) and mom_bull_ok a
         pend_bull_cnt := 1
         pend_bull_lb  := bar_index
         bull_tent := true
-    if pend_bull_cnt >= eff_cbl
+    if pend_bull_cnt >= eff_cbl and barstate.isconfirmed
         bull_break := true
         remove_res(new_bull_idx)
         pend_bull_key := -1
@@ -508,29 +526,25 @@ else if pend_bull_key >= 0 and bar_index > pend_bull_lb and barstate.isconfirmed
 // ═══════════════════════════════════════════════════════════════
 
 if use_fast and fast_len < swing_len
-    if not na(fsup_ln) and not fsup_cd and bar_index > fsup_x1
+    if not na(fsup_ln) and bar_index > fsup_cd_bar and bar_index > fsup_x1
         flp = calc_line_at(fsup_x1, fsup_y1, fsup_x2, fsup_y2, bar_index)
         fwd = low < flp - min_dist
         fcd = close < flp - min_dist
         ftrig = mode == "Wick" ? fwd : mode == "Close" ? fcd : (fwd or fcd)
-        if ftrig and vol_ok and body_bear_ok(flp) and mom_bear_ok and trend_bear_ok
+        if ftrig and vol_ok and body_bear_ok(flp) and mom_bear_ok and trend_bear_ok and barstate.isconfirmed
             fast_bear := true
             line.delete(fsup_ln)
             fsup_ln := na
-    else if not na(fsup_ln)
-        fsup_cd := false
 
-    if not na(fres_ln) and not fres_cd and bar_index > fres_x1
+    if not na(fres_ln) and bar_index > fres_cd_bar and bar_index > fres_x1
         flp = calc_line_at(fres_x1, fres_y1, fres_x2, fres_y2, bar_index)
         fwu = high > flp + min_dist
         fcu = close > flp + min_dist
         ftrig = mode == "Wick" ? fwu : mode == "Close" ? fcu : (fwu or fcu)
-        if ftrig and vol_ok and body_bull_ok(flp) and mom_bull_ok and trend_bull_ok
+        if ftrig and vol_ok and body_bull_ok(flp) and mom_bull_ok and trend_bull_ok and barstate.isconfirmed
             fast_bull := true
             line.delete(fres_ln)
             fres_ln := na
-    else if not na(fres_ln)
-        fres_cd := false
 
 // ═══════════════════════════════════════════════════════════════
 //  ОТРИСОВКА СИГНАЛОВ
@@ -555,7 +569,7 @@ plotshape(show_tent and bear_tent and not bear_break, title = "Bear Tent", style
      location = location.abovebar, color = color.new(#FF1744, 50), size = size.small)
 
 bgcolor(bull_break and not bear_break and show_bg ? bg_up : na, title = "Bull BG")
-bgcolor(bear_break and show_bg ? bg_dn : na, title = "Bear BG")
+bgcolor(bear_break and not bull_break and show_bg ? bg_dn : na, title = "Bear BG")
 
 // ═══════════════════════════════════════════════════════════════
 //  ИНФОРМАЦИОННАЯ ПАНЕЛЬ
