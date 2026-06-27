@@ -14,6 +14,8 @@ int    swing_len = input.int(5, "Slow Swing Length", minval = 2, maxval = 50, gr
      tooltip = "Для подтверждённых линий. Быстрые используют половину.")
 bool   use_fast  = input.bool(true, "Fast Lines (early signals)", group = GRP_SWING,
      tooltip = "Линии по пивотам с половинной длиной — раньше видят разворот.")
+bool   auto_swing_len = input.bool(true, "Auto Scale by Timeframe", group = GRP_SWING,
+     tooltip = "Автомасштаб: 1H→10, 4H→8, 15m→8. Отключите для ручного управления.")
 
 // ═══════════════════════════════════════════════════════════════
 //  НАСТРОЙКИ — TREND LINES
@@ -58,12 +60,18 @@ bool   use_smc   = input.bool(true, "Enable SMC Module", group = GRP_SMC)
 bool   show_bos  = input.bool(true, "Show BOS Signals", group = GRP_SMC)
 bool   show_choch = input.bool(true, "Show CHOCH Signals", group = GRP_SMC)
 bool   show_swing_lvl = input.bool(true, "Show Swing Level Lines", group = GRP_SMC)
-bool   show_swing_trail = input.bool(true, "Show HH/HL/LH/LL Labels", group = GRP_SMC,
-     tooltip = "Маркеры структуры у каждого пивота.")
-int    smc_confirm = input.int(1, "SMC Confirmation Bars", minval = 1, maxval = 5, group = GRP_SMC,
-     tooltip = "Количество баров закрытия за уровнем для подтверждения BOS/CHOCH.")
+bool   show_swing_trail = input.bool(true, "Show HH/HL/LH/LL Labels", group = GRP_SMC)
+int    smc_confirm = input.int(1, "SMC Confirmation Bars", minval = 1, maxval = 5, group = GRP_SMC)
+bool   show_sfp  = input.bool(true, "Show SFP (Swing Failure)", group = GRP_SMC,
+     tooltip = "Тень пробивает swing level, но close возвращается.")
+bool   show_div  = input.bool(true, "Show Divergence at Pivots", group = GRP_SMC,
+     tooltip = "RSI-дивергенция: цена HH но RSI LH (медвежья), цена LL но RSI HL (бычья).")
 color  col_bos   = input.color(#2962FF, "BOS Color", group = GRP_SMC)
 color  col_choch = input.color(#E040FB, "CHOCH Color", group = GRP_SMC)
+float  smc_min_swing = input.float(0.5, "Min Swing Size (ATR x)", minval = 0.0, step = 0.1, group = GRP_SMC,
+     tooltip = "Мин. размах свинга для BOS/CHOCH. 0=любой. Фильтрует шум в рейндже.")
+int    smc_min_conf  = input.int(2, "Min Confluence for Labels", minval = 0, maxval = 5, group = GRP_SMC,
+     tooltip = "BOS/CHOCH лейблы только при confluence >= этого значения. 0=все.")
 
 string GRP_DISP  = "══ Displacement ══"
 float  disp_mul  = input.float(1.5, "Displacement Body Multiplier", minval = 1.0, step = 0.1, group = GRP_DISP,
@@ -75,10 +83,8 @@ bool   show_ob   = input.bool(true, "Show Order Blocks", group = GRP_OB)
 int    ob_max    = input.int(5, "Max Active Order Blocks", minval = 1, maxval = 20, group = GRP_OB)
 int    ob_lookback = input.int(10, "OB Lookback Bars", minval = 3, maxval = 30, group = GRP_OB)
 bool   ob_mitigate = input.bool(true, "Remove Mitigated OBs", group = GRP_OB)
-bool   ob_use_body = input.bool(false, "OB: Use Body Only (refine)", group = GRP_OB,
-     tooltip = "OB зона = тело свечи (open-close) вместо полной (high-low).")
-bool   show_breaker = input.bool(true, "Show Breaker Blocks", group = GRP_OB,
-     tooltip = "Пробитый OB становится Breaker Block с обратным направлением.")
+bool   ob_use_body = input.bool(false, "OB: Use Body Only (refine)", group = GRP_OB)
+bool   show_breaker = input.bool(true, "Show Breaker Blocks", group = GRP_OB)
 color  col_ob_bull = input.color(color.new(#00BFA5, 80), "Bullish OB Color", group = GRP_OB)
 color  col_ob_bear = input.color(color.new(#FF1744, 80), "Bearish OB Color", group = GRP_OB)
 
@@ -86,8 +92,7 @@ string GRP_FVG   = "══ Fair Value Gaps ══"
 bool   show_fvg  = input.bool(true, "Show FVG Zones", group = GRP_FVG)
 int    fvg_max   = input.int(5, "Max Active FVGs", minval = 1, maxval = 20, group = GRP_FVG)
 bool   fvg_remove_filled = input.bool(true, "Remove Filled FVGs", group = GRP_FVG)
-float  fvg_min_atr = input.float(0.2, "FVG Min Size (ATR x)", minval = 0.0, step = 0.05, group = GRP_FVG,
-     tooltip = "Минимальный размер гэпа = ATR x этот множитель. 0 = любой.")
+float  fvg_min_atr = input.float(0.2, "FVG Min Size (ATR x)", minval = 0.0, step = 0.05, group = GRP_FVG)
 color  col_fvg_bull = input.color(color.new(#00BFA5, 85), "Bullish FVG Color", group = GRP_FVG)
 color  col_fvg_bear = input.color(color.new(#FF1744, 85), "Bearish FVG Color", group = GRP_FVG)
 
@@ -95,8 +100,7 @@ string GRP_LIQ   = "══ Liquidity ══"
 bool   show_liq  = input.bool(true, "Show Equal H/L Liquidity", group = GRP_LIQ)
 float  eq_atr_pct = input.float(0.1, "Equal Level ATR Threshold", minval = 0.01, step = 0.01, group = GRP_LIQ)
 bool   show_sweep = input.bool(true, "Mark Liquidity Sweeps", group = GRP_LIQ)
-bool   show_induce = input.bool(true, "Show Inducement (IDM)", group = GRP_LIQ,
-     tooltip = "Промежуточные свинги между ключевыми уровнями. При свипе = IDM.")
+bool   show_induce = input.bool(true, "Show Inducement (IDM)", group = GRP_LIQ)
 color  col_liq   = input.color(color.new(#FFD600, 50), "Liquidity Level Color", group = GRP_LIQ)
 int    liq_max   = input.int(5, "Max Liquidity Levels", minval = 1, maxval = 10, group = GRP_LIQ)
 
@@ -112,15 +116,36 @@ bool   show_ny_sess = input.bool(false, "NY Session", group = GRP_SESS)
 string sess_ny = input.string("1300-2100", "NY Time (UTC)", group = GRP_SESS)
 color  col_ny = input.color(color.new(#00BFA5, 88), "NY Color", group = GRP_SESS)
 
+string GRP_KZ    = "══ Kill Zones ══"
+bool   show_kz   = input.bool(false, "Show Kill Zones", group = GRP_KZ,
+     tooltip = "Подсветка фона в окнах макс. институциональной активности.")
+color  col_kz    = input.color(color.new(#FF6D00, 92), "KZ Background", group = GRP_KZ)
+bool   use_time_filter = input.bool(false, "No-Trade Time Filter", group = GRP_KZ)
+string no_trade_time = input.string("2100-0000", "No-Trade Window (UTC)", group = GRP_KZ,
+     tooltip = "В это время composite-сигналы подавляются.")
+
 string GRP_PD    = "══ Premium / Discount ══"
 bool   show_pd   = input.bool(false, "Show Premium/Discount Zones", group = GRP_PD)
 color  col_premium = input.color(color.new(#FF1744, 93), "Premium Zone Color", group = GRP_PD)
 color  col_discount = input.color(color.new(#00BFA5, 93), "Discount Zone Color", group = GRP_PD)
 
 string GRP_MTF   = "══ Multi-Timeframe ══"
-bool   use_mtf   = input.bool(false, "Enable MTF Confirmation", group = GRP_MTF,
-     tooltip = "Бычий сигнал только если старший ТФ не медвежий. +1 бар задержка.")
+bool   use_mtf   = input.bool(false, "Enable MTF Confirmation", group = GRP_MTF)
 string htf       = input.timeframe("15", "Higher Timeframe", group = GRP_MTF)
+
+string GRP_SIGNAL = "══ Composite Signal ══"
+bool   show_ote  = input.bool(true, "Show OTE Zone (Fib 0.618-0.786)", group = GRP_SIGNAL,
+     tooltip = "Optimal Trade Entry — зона отката по Фибоначчи после BOS/CHOCH.")
+bool   show_composite = input.bool(true, "Show Composite BUY/SELL", group = GRP_SIGNAL)
+int    composite_min_conf = input.int(2, "Min Confluence for Signal", minval = 1, maxval = 5, group = GRP_SIGNAL)
+float  tp_atr_mul = input.float(2.5, "TP ATR Multiplier", minval = 0.5, step = 0.5, group = GRP_SIGNAL,
+     tooltip = "TP = entry ± ATR × этот множитель. Реалистичнее чем key_sh/key_sl на старших ТФ.")
+float  sl_atr_buf_mul = input.float(1.0, "SL ATR Buffer", minval = 0.1, step = 0.1, group = GRP_SIGNAL,
+     tooltip = "Буфер под/над OTE зоной для SL. Больше = меньше стоп-аутов.")
+int    composite_cooldown = input.int(10, "Signal Cooldown (bars)", minval = 1, maxval = 100, group = GRP_SIGNAL,
+     tooltip = "Мин. баров между composite-сигналами. Снижает частоту сигналов.")
+bool   show_sltp = input.bool(true, "Show SL/TP Lines", group = GRP_SIGNAL)
+bool   show_stats = input.bool(true, "Show Backtest Stats", group = GRP_SIGNAL)
 
 string GRP_VIS   = "══ Visuals ══"
 bool   show_bg   = input.bool(true, "Highlight Break Bars", group = GRP_VIS)
@@ -131,6 +156,12 @@ bool   show_fast = input.bool(true, "Show Fast Break Signals", group = GRP_VIS)
 bool   show_ema  = input.bool(true, "Show EMA Cloud", group = GRP_VIS)
 int    ema_fl    = input.int(20, "EMA Fast", group = GRP_VIS)
 int    ema_sl    = input.int(50, "EMA Slow", group = GRP_VIS)
+bool   use_candle_color = input.bool(false, "Color Candles by Structure", group = GRP_VIS)
+
+string GRP_MULTI = "══ Multi-Symbol ══"
+bool   show_multi = input.bool(false, "Show Multi-Symbol Panel", group = GRP_MULTI)
+string sym1_input = input.symbol("BINANCE:BTCUSDT", "Symbol 1", group = GRP_MULTI)
+string sym2_input = input.symbol("BINANCE:ETHUSDT", "Symbol 2", group = GRP_MULTI)
 
 string GRP_ALR   = "══ Alerts ══"
 bool   alr_bull  = input.bool(true, "Alert: Bullish Break", group = GRP_ALR)
@@ -141,6 +172,8 @@ bool   alr_bos   = input.bool(true, "Alert: BOS", group = GRP_ALR)
 bool   alr_choch = input.bool(true, "Alert: CHOCH", group = GRP_ALR)
 bool   alr_sweep = input.bool(true, "Alert: Liquidity Sweep", group = GRP_ALR)
 bool   alr_induce = input.bool(false, "Alert: Inducement (IDM)", group = GRP_ALR)
+bool   alr_composite = input.bool(true, "Alert: Composite Signal", group = GRP_ALR)
+bool   alr_sfp   = input.bool(true, "Alert: SFP", group = GRP_ALR)
 
 // ═══════════════════════════════════════════════════════════════
 //  ПРИМИТИВЫ
@@ -165,7 +198,11 @@ fill(pEMA1, pEMA2, color = emaFast > emaSlow ? color.new(col_sup, 92) : color.ne
 trend_bear_ok = trend_mode == "Off" ? true : trend_mode == "EMA Cross" ? (emaFast < emaSlow) : (close < emaFast)
 trend_bull_ok = trend_mode == "Off" ? true : trend_mode == "EMA Cross" ? (emaFast > emaSlow) : (close > emaFast)
 
-eff_min_slope = min_slope_bars > 0 ? min_slope_bars : swing_len * 2
+// Auto swing length scaling by timeframe
+int tf_secs = timeframe.in_seconds()
+int eff_swing_len = auto_swing_len ? (tf_secs >= 86400 ? swing_len : tf_secs >= 14400 ? math.max(swing_len, 8) : tf_secs >= 3600 ? math.max(swing_len, 10) : tf_secs >= 900 ? math.max(swing_len, 8) : swing_len) : swing_len
+
+eff_min_slope = min_slope_bars > 0 ? min_slope_bars : eff_swing_len * 2
 
 avg_body = ta.sma(math.abs(close - open), 10)
 
@@ -189,6 +226,15 @@ mom_bear_ok = get_mom_bear()
 candle_body = math.abs(close - open)
 is_displacement = not na(avg_body) and avg_body > 0 and candle_body > avg_body * disp_mul
 disp_ok = not req_disp or is_displacement
+
+// Kill Zones (EST = America/New_York)
+bool in_kz_london  = not na(time(timeframe.period, "0200-0500", "America/New_York"))
+bool in_kz_ny_open = not na(time(timeframe.period, "0700-1000", "America/New_York"))
+bool in_kz_ny_close = not na(time(timeframe.period, "1000-1100", "America/New_York"))
+bool in_any_kz = in_kz_london or in_kz_ny_open or in_kz_ny_close
+
+// Time filter
+bool in_no_trade = use_time_filter and no_trade_time != "" and not na(time(timeframe.period, no_trade_time, "UTC"))
 
 // ═══════════════════════════════════════════════════════════════
 //  СОСТОЯНИЕ — МЕДЛЕННЫЕ ЛИНИИ
@@ -227,7 +273,7 @@ var int pend_bull_lb  = -1
 //  СОСТОЯНИЕ — БЫСТРЫЕ ЛИНИИ
 // ═══════════════════════════════════════════════════════════════
 
-int fast_len = math.max(2, swing_len / 2)
+int fast_len = math.max(2, eff_swing_len / 2)
 
 var float[] fsh_prices = array.new_float(0)
 var int[]   fsh_bars   = array.new_int(0)
@@ -265,7 +311,6 @@ var bool  sl_broken = true
 var line  swing_h_line = na
 var line  swing_l_line = na
 
-// BOS/CHOCH pending confirmation
 var int   pend_smc_bull_key = -1
 var int   pend_smc_bull_cnt = 0
 var int   pend_smc_bull_lb  = -1
@@ -273,28 +318,54 @@ var int   pend_smc_bear_key = -1
 var int   pend_smc_bear_cnt = 0
 var int   pend_smc_bear_lb  = -1
 
-// Order Block (+ breaker flag)
 var box[]   ob_boxes = array.new_box(0)
 var float[] ob_tops  = array.new_float(0)
 var float[] ob_bots  = array.new_float(0)
 var int[]   ob_dirs  = array.new_int(0)
-var int[]   ob_brk   = array.new_int(0)  // 0=OB, 1=breaker
+var int[]   ob_brk   = array.new_int(0)
 
-// Fair Value Gap
 var box[]   fvg_boxes = array.new_box(0)
 var float[] fvg_tops  = array.new_float(0)
 var float[] fvg_bots  = array.new_float(0)
 var int[]   fvg_dirs  = array.new_int(0)
 
-// Liquidity
 var line[]  liq_lines  = array.new_line(0)
 var float[] liq_prices = array.new_float(0)
 var int[]   liq_dirs   = array.new_int(0)
 
-// Inducement
 var line[]  idm_lines  = array.new_line(0)
 var float[] idm_prices = array.new_float(0)
 var int[]   idm_dirs   = array.new_int(0)
+
+// OTE
+var box   ote_box = na
+var float ote_top_price = na
+var float ote_bot_price = na
+var int   ote_dir = 0
+var bool  ote_buy_fired = false
+var bool  ote_sell_fired = false
+
+// SL/TP lines
+var line  sl_line = na
+var line  tp_line = na
+
+// Divergence
+var float prev_pivot_h_rsi = na
+var float prev_pivot_l_rsi = na
+
+// Backtest
+var int   bt_total = 0
+var int   bt_wins = 0
+var int   bt_losses = 0
+var float bt_entry = na
+var float bt_sl = na
+var float bt_tp = na
+var int   bt_dir = 0
+var bool  bt_in_trade = false
+var float bt_last_rr = 0.0
+var float bt_sum_rr = 0.0
+var int   last_composite_bar = -1000
+var bool  bt_trailed = false
 
 // Sessions
 var float asian_hi = na
@@ -329,15 +400,27 @@ smc_is_choch_bear = false
 sweep_bull = false
 sweep_bear = false
 idm_swept  = false
+sfp_bull   = false
+sfp_bear   = false
+div_bull   = false
+div_bear   = false
+composite_buy  = false
+composite_sell = false
 
 // ═══════════════════════════════════════════════════════════════
-//  MTF (request.security — глобальный уровень)
+//  MTF + MULTI-SYMBOL (request.security — global)
 // ═══════════════════════════════════════════════════════════════
 
 htf_struct = request.security(syminfo.tickerid, htf, mkt_structure, barmerge.gaps_off, barmerge.lookahead_off)
 int htf_s = use_mtf and not na(htf_struct) ? htf_struct : 0
 bool mtf_bull_ok = not use_mtf or htf_s >= 0
 bool mtf_bear_ok = not use_mtf or htf_s <= 0
+
+[sym1_ef, sym1_es] = request.security(sym1_input, timeframe.period, [ta.ema(close, ema_fl), ta.ema(close, ema_sl)], barmerge.gaps_off, barmerge.lookahead_off)
+[sym2_ef, sym2_es] = request.security(sym2_input, timeframe.period, [ta.ema(close, ema_fl), ta.ema(close, ema_sl)], barmerge.gaps_off, barmerge.lookahead_off)
+
+bool sym1_bull = not na(sym1_ef) and not na(sym1_es) and sym1_ef > sym1_es
+bool sym2_bull = not na(sym2_ef) and not na(sym2_es) and sym2_ef > sym2_es
 
 // ═══════════════════════════════════════════════════════════════
 //  ПОМОЩНИКИ
@@ -425,15 +508,15 @@ body_bear_ok(float lp) =>
         (lp - src) > avg_body
 
 // ═══════════════════════════════════════════════════════════════
-//  МЕДЛЕННЫЕ ПИВОТЫ + ЛИНИИ + SMC SWING TRACKING
+//  МЕДЛЕННЫЕ ПИВОТЫ + ЛИНИИ + SMC SWING + DIVERGENCE
 // ═══════════════════════════════════════════════════════════════
 
-pivot_h = ta.pivothigh(high, swing_len, swing_len)
-pivot_l = ta.pivotlow(low, swing_len, swing_len)
+pivot_h = ta.pivothigh(high, eff_swing_len, eff_swing_len)
+pivot_l = ta.pivotlow(low, eff_swing_len, eff_swing_len)
 
 if not na(pivot_h)
-    bh = bar_index - swing_len
-    hp = high[swing_len]
+    bh = bar_index - eff_swing_len
+    hp = high[eff_swing_len]
     array.unshift(sh_prices, hp)
     array.unshift(sh_bars, bh)
     if array.size(sh_prices) > 20
@@ -455,6 +538,14 @@ if not na(pivot_h)
             array.unshift(res_cd, true)
     if use_smc
         bool is_hh = na(key_sh) or hp > key_sh
+        // Divergence: HH in price but LH in RSI
+        if show_div and not na(prev_sh_price) and not na(prev_pivot_h_rsi) and not na(rsi_val[eff_swing_len])
+            float cur_rsi = rsi_val[eff_swing_len]
+            if hp > prev_sh_price and cur_rsi < prev_pivot_h_rsi
+                div_bear := true
+                label.new(bh, hp, "DIV", style = label.style_label_down,
+                     color = color.new(col_res, 50), textcolor = col_res, size = size.tiny)
+        prev_pivot_h_rsi := rsi_val[eff_swing_len]
         prev_sh_price := key_sh
         key_sh := hp
         key_sh_bar := bh
@@ -472,8 +563,8 @@ if not na(pivot_h)
                  color = color.new(sh_col, 70), textcolor = sh_col, size = size.tiny)
 
 if not na(pivot_l)
-    bl = bar_index - swing_len
-    lp = low[swing_len]
+    bl = bar_index - eff_swing_len
+    lp = low[eff_swing_len]
     array.unshift(sl_prices, lp)
     array.unshift(sl_bars, bl)
     if array.size(sl_prices) > 20
@@ -495,6 +586,14 @@ if not na(pivot_l)
             array.unshift(sup_cd, true)
     if use_smc
         bool is_hl = na(key_sl) or lp > key_sl
+        // Divergence: LL in price but HL in RSI
+        if show_div and not na(prev_sl_price) and not na(prev_pivot_l_rsi) and not na(rsi_val[eff_swing_len])
+            float cur_rsi = rsi_val[eff_swing_len]
+            if lp < prev_sl_price and cur_rsi > prev_pivot_l_rsi
+                div_bull := true
+                label.new(bl, lp, "DIV", style = label.style_label_up,
+                     color = color.new(col_sup, 50), textcolor = col_sup, size = size.tiny)
+        prev_pivot_l_rsi := rsi_val[eff_swing_len]
         prev_sl_price := key_sl
         key_sl := lp
         key_sl_bar := bl
@@ -515,8 +614,8 @@ if not na(pivot_l)
 //  БЫСТРЫЕ ПИВОТЫ + ЛИНИИ + INDUCEMENT
 // ═══════════════════════════════════════════════════════════════
 
-f_pivot_h = use_fast and fast_len < swing_len ? ta.pivothigh(high, fast_len, fast_len) : na
-f_pivot_l = use_fast and fast_len < swing_len ? ta.pivotlow(low, fast_len, fast_len) : na
+f_pivot_h = use_fast and fast_len < eff_swing_len ? ta.pivothigh(high, fast_len, fast_len) : na
+f_pivot_l = use_fast and fast_len < eff_swing_len ? ta.pivotlow(low, fast_len, fast_len) : na
 
 if not na(f_pivot_h)
     bh = bar_index - fast_len
@@ -540,7 +639,6 @@ if not na(f_pivot_h)
             fres_x2 := x2
             fres_y2 := y2
             fres_cd_bar := bar_index
-    // Inducement: fast pivot high между key_sl и key_sh
     if use_smc and show_induce and not na(key_sh) and not na(key_sl) and not na(atr)
         if hp < key_sh and hp > key_sl
             if array.size(idm_lines) >= liq_max
@@ -575,7 +673,6 @@ if not na(f_pivot_l)
             fsup_x2 := x2
             fsup_y2 := y2
             fsup_cd_bar := bar_index
-    // Inducement: fast pivot low между key_sl и key_sh
     if use_smc and show_induce and not na(key_sh) and not na(key_sl) and not na(atr)
         if lp > key_sl and lp < key_sh
             if array.size(idm_lines) >= liq_max
@@ -588,10 +685,10 @@ if not na(f_pivot_l)
             array.push(idm_prices, lp)
             array.push(idm_dirs, -1)
 
-if not na(fres_ln) and bar_index > fres_x1 + swing_len
+if not na(fres_ln) and bar_index > fres_x1 + eff_swing_len
     line.delete(fres_ln)
     fres_ln := na
-if not na(fsup_ln) and bar_index > fsup_x1 + swing_len
+if not na(fsup_ln) and bar_index > fsup_x1 + eff_swing_len
     line.delete(fsup_ln)
     fsup_ln := na
 
@@ -606,7 +703,6 @@ bool in_asian  = show_sessions and show_asian_sess and in_asian_raw
 bool in_london = show_sessions and show_london_sess and in_london_raw
 bool in_ny     = show_sessions and show_ny_sess and in_ny_raw
 
-// Asian session
 if in_asian
     if not in_asian[1] or na(asian_hi)
         asian_hi := high
@@ -626,7 +722,6 @@ if in_asian
         box.set_bottom(asian_box, asian_lo)
         box.set_right(asian_box, bar_index)
 
-// London session
 if in_london
     if not in_london[1] or na(london_hi)
         london_hi := high
@@ -646,7 +741,6 @@ if in_london
         box.set_bottom(london_box, london_lo)
         box.set_right(london_box, bar_index)
 
-// NY session
 if in_ny
     if not in_ny[1] or na(ny_hi)
         ny_hi := high
@@ -757,7 +851,6 @@ if use_smc and show_liq and show_sweep and array.size(liq_lines) > 0
             array.remove(liq_prices, i)
             array.remove(liq_dirs, i)
 
-// Inducement sweep
 if use_smc and show_induce and array.size(idm_lines) > 0
     for i = array.size(idm_lines) - 1 to 0
         p = array.get(idm_prices, i)
@@ -780,12 +873,29 @@ if use_smc and show_induce and array.size(idm_lines) > 0
             array.remove(idm_dirs, i)
 
 // ═══════════════════════════════════════════════════════════════
-//  SMC: BOS / CHOCH DETECTION (with confirmation bars)
+//  SMC: SFP (Swing Failure Pattern)
 // ═══════════════════════════════════════════════════════════════
 
+if use_smc and show_sfp and barstate.isconfirmed
+    if not na(key_sh) and not sh_broken and high > key_sh and close < key_sh
+        sfp_bear := true
+        label.new(bar_index, high, "SFP", style = label.style_label_down,
+             color = color.new(col_res, 40), textcolor = color.white, size = size.small)
+    if not na(key_sl) and not sl_broken and low < key_sl and close > key_sl
+        sfp_bull := true
+        label.new(bar_index, low, "SFP", style = label.style_label_up,
+             color = color.new(col_sup, 40), textcolor = color.white, size = size.small)
+
+// ═══════════════════════════════════════════════════════════════
+//  SMC: BOS / CHOCH DETECTION
+// ═══════════════════════════════════════════════════════════════
+
+// Min swing size filter — reject noise in ranging markets
+float swing_range = not na(key_sh) and not na(key_sl) ? key_sh - key_sl : 0.0
+bool swing_size_ok = smc_min_swing <= 0 or na(atr) or swing_range >= atr * smc_min_swing
+
 if use_smc and barstate.isconfirmed
-    // Bullish: close > key_sh
-    if not na(key_sh) and not sh_broken and close > key_sh and disp_ok and mtf_bull_ok
+    if not na(key_sh) and not sh_broken and close > key_sh and disp_ok and mtf_bull_ok and swing_size_ok
         if key_sh_bar == pend_smc_bull_key
             if bar_index > pend_smc_bull_lb
                 pend_smc_bull_cnt += 1
@@ -813,8 +923,7 @@ if use_smc and barstate.isconfirmed
         pend_smc_bull_cnt := 0
         pend_smc_bull_lb  := -1
 
-    // Bearish: close < key_sl
-    if not na(key_sl) and not sl_broken and close < key_sl and disp_ok and mtf_bear_ok
+    if not na(key_sl) and not sl_broken and close < key_sl and disp_ok and mtf_bear_ok and swing_size_ok
         if key_sl_bar == pend_smc_bear_key
             if bar_index > pend_smc_bear_lb
                 pend_smc_bear_cnt += 1
@@ -843,7 +952,37 @@ if use_smc and barstate.isconfirmed
         pend_smc_bear_lb  := -1
 
 // ═══════════════════════════════════════════════════════════════
-//  SMC: ORDER BLOCK CREATION (при BOS/CHOCH)
+//  OTE ZONE (после BOS/CHOCH)
+// ═══════════════════════════════════════════════════════════════
+
+if use_smc and show_ote
+    if smc_bull and not na(key_sh) and not na(key_sl) and key_sh > key_sl
+        float rng = key_sh - key_sl
+        ote_top_price := key_sh - rng * 0.618
+        ote_bot_price := key_sh - rng * 0.786
+        ote_dir := 1
+        ote_buy_fired := false
+        if not na(ote_box)
+            box.delete(ote_box)
+        ote_box := box.new(bar_index, ote_top_price, bar_index + 50, ote_bot_price,
+             bgcolor = color.new(col_sup, 88), border_color = color.new(col_sup, 50),
+             border_width = 1, border_style = line.style_dotted)
+    if smc_bear and not na(key_sh) and not na(key_sl) and key_sh > key_sl
+        float rng = key_sh - key_sl
+        ote_top_price := key_sl + rng * 0.786
+        ote_bot_price := key_sl + rng * 0.618
+        ote_dir := -1
+        ote_sell_fired := false
+        if not na(ote_box)
+            box.delete(ote_box)
+        ote_box := box.new(bar_index, ote_top_price, bar_index + 50, ote_bot_price,
+             bgcolor = color.new(col_res, 88), border_color = color.new(col_res, 50),
+             border_width = 1, border_style = line.style_dotted)
+    if not na(ote_box)
+        box.set_right(ote_box, bar_index + 5)
+
+// ═══════════════════════════════════════════════════════════════
+//  SMC: ORDER BLOCK CREATION
 // ═══════════════════════════════════════════════════════════════
 
 if use_smc and show_ob
@@ -887,7 +1026,7 @@ if use_smc and show_ob
                 break
 
 // ═══════════════════════════════════════════════════════════════
-//  SMC: FVG DETECTION (с фильтром минимального размера)
+//  SMC: FVG DETECTION
 // ═══════════════════════════════════════════════════════════════
 
 if use_smc and show_fvg and barstate.isconfirmed and bar_index > 2
@@ -926,7 +1065,7 @@ if use_smc and show_fvg and barstate.isconfirmed and bar_index > 2
             array.push(fvg_dirs, -1)
 
 // ═══════════════════════════════════════════════════════════════
-//  SMC: LIQUIDITY DETECTION (equal highs / equal lows)
+//  SMC: LIQUIDITY DETECTION
 // ═══════════════════════════════════════════════════════════════
 
 if use_smc and show_liq and not na(atr)
@@ -958,7 +1097,7 @@ if use_smc and show_liq and not na(atr)
             array.push(liq_dirs, -1)
 
 // ═══════════════════════════════════════════════════════════════
-//  SMC: SWING LEVEL LINES + BOX/LINE EXTENSION
+//  SMC: SWING LEVEL LINES + EXTENSION
 // ═══════════════════════════════════════════════════════════════
 
 if use_smc and show_swing_lvl
@@ -1004,6 +1143,7 @@ if use_smc and show_induce and array.size(idm_lines) > 0
 pd_high = key_sh
 pd_low  = key_sl
 pd_mid  = not na(pd_high) and not na(pd_low) ? (pd_high + pd_low) / 2.0 : na
+
 in_premium  = not na(pd_mid) and close > pd_mid
 in_discount = not na(pd_mid) and close < pd_mid
 
@@ -1054,6 +1194,121 @@ if near_ob_bear or near_fvg_bear
     conf_bear += 1
 
 int confluence = mkt_structure == 1 ? conf_bull : mkt_structure == -1 ? conf_bear : math.max(conf_bull, conf_bear)
+
+// ═══════════════════════════════════════════════════════════════
+//  COMPOSITE SIGNAL + SL/TP + BACKTEST
+// ═══════════════════════════════════════════════════════════════
+
+// Backtest exit check + trailing stop (before new entries)
+if bt_in_trade
+    if bt_dir == 1
+        // Trailing: move SL to breakeven after 1.5R profit
+        if not bt_trailed and not na(bt_entry) and not na(bt_sl)
+            float be_level = bt_entry + (bt_entry - bt_sl) * 1.5
+            if high >= be_level
+                bt_sl := bt_entry
+                bt_trailed := true
+                if show_sltp and not na(sl_line)
+                    line.set_y1(sl_line, bt_sl)
+                    line.set_y2(sl_line, bt_sl)
+        if high >= bt_tp
+            bt_wins += 1
+            bt_sum_rr += bt_last_rr
+            bt_in_trade := false
+        else if low <= bt_sl
+            if bt_trailed
+                bt_wins += 1
+                bt_sum_rr += 0.5
+            else
+                bt_losses += 1
+            bt_in_trade := false
+    else if bt_dir == -1
+        // Trailing: move SL to breakeven after 1.5R profit
+        if not bt_trailed and not na(bt_entry) and not na(bt_sl)
+            float be_level = bt_entry - (bt_sl - bt_entry) * 1.5
+            if low <= be_level
+                bt_sl := bt_entry
+                bt_trailed := true
+                if show_sltp and not na(sl_line)
+                    line.set_y1(sl_line, bt_sl)
+                    line.set_y2(sl_line, bt_sl)
+        if low <= bt_tp
+            bt_wins += 1
+            bt_sum_rr += bt_last_rr
+            bt_in_trade := false
+        else if high >= bt_sl
+            if bt_trailed
+                bt_wins += 1
+                bt_sum_rr += 0.5
+            else
+                bt_losses += 1
+            bt_in_trade := false
+
+// Clean SL/TP lines when trade exits
+if not bt_in_trade and show_sltp
+    if not na(sl_line)
+        line.delete(sl_line)
+        sl_line := na
+    if not na(tp_line)
+        line.delete(tp_line)
+        tp_line := na
+
+// Composite entry signal
+bool in_ote_buy  = ote_dir == 1 and not na(ote_top_price) and not na(ote_bot_price) and close <= ote_top_price and close >= ote_bot_price
+bool in_ote_sell = ote_dir == -1 and not na(ote_top_price) and not na(ote_bot_price) and close >= ote_bot_price and close <= ote_top_price
+
+bool cd_ok = bar_index - last_composite_bar >= composite_cooldown
+
+if use_smc and show_composite and barstate.isconfirmed and not bt_in_trade and not in_no_trade and cd_ok
+    if mkt_structure == 1 and conf_bull >= composite_min_conf and not ote_buy_fired
+        bool ote_cond = show_ote ? in_ote_buy : (near_ob_bull or near_fvg_bull or in_discount)
+        if ote_cond
+            composite_buy := true
+            ote_buy_fired := true
+            last_composite_bar := bar_index
+            bt_entry := close
+            // SL: below OTE zone bottom + ATR buffer; TP: ATR-based
+            float sl_atr_buf = not na(atr) ? atr * sl_atr_buf_mul : close * 0.01
+            bt_sl := show_ote and not na(ote_bot_price) ? ote_bot_price - sl_atr_buf : (near_ob_bull and array.size(ob_bots) > 0 ? array.get(ob_bots, array.size(ob_bots) - 1) - sl_atr_buf : (not na(key_sl) ? key_sl : close - (not na(atr) ? atr * 1.5 : close * 0.015)))
+            bt_tp := close + (not na(atr) ? atr * tp_atr_mul : close * 0.025)
+            bt_trailed := false
+            float denom = bt_entry - bt_sl
+            bt_last_rr := denom > 0 ? (bt_tp - bt_entry) / denom : 1.0
+            bt_dir := 1
+            bt_in_trade := true
+            bt_total += 1
+            if show_sltp
+                sl_line := line.new(bar_index, bt_sl, bar_index + 1, bt_sl,
+                     color = col_res, style = line.style_dotted, width = 1, extend = extend.right)
+                tp_line := line.new(bar_index, bt_tp, bar_index + 1, bt_tp,
+                     color = col_sup, style = line.style_dotted, width = 1, extend = extend.right)
+            label.new(bar_index, low, "BUY\nR:R " + str.tostring(bt_last_rr, "#.#") + ":1\nConf " + str.tostring(conf_bull) + "/5",
+                 style = label.style_label_up, color = col_sup, textcolor = color.white, size = size.normal)
+
+    if mkt_structure == -1 and conf_bear >= composite_min_conf and not ote_sell_fired
+        bool ote_cond = show_ote ? in_ote_sell : (near_ob_bear or near_fvg_bear or in_premium)
+        if ote_cond
+            composite_sell := true
+            ote_sell_fired := true
+            last_composite_bar := bar_index
+            bt_entry := close
+            // SL: above OTE zone top + ATR buffer; TP: ATR-based
+            float sl_atr_buf = not na(atr) ? atr * sl_atr_buf_mul : close * 0.01
+            bt_sl := show_ote and not na(ote_top_price) ? ote_top_price + sl_atr_buf : (near_ob_bear and array.size(ob_tops) > 0 ? array.get(ob_tops, array.size(ob_tops) - 1) + sl_atr_buf : (not na(key_sh) ? key_sh : close + (not na(atr) ? atr * 1.5 : close * 0.015)))
+            bt_tp := close - (not na(atr) ? atr * tp_atr_mul : close * 0.025)
+            bt_trailed := false
+            float denom = bt_sl - bt_entry
+            bt_last_rr := denom > 0 ? (bt_entry - bt_tp) / denom : 1.0
+            bt_dir := -1
+            bt_in_trade := true
+            bt_total += 1
+            if show_sltp
+                sl_line := line.new(bar_index, bt_sl, bar_index + 1, bt_sl,
+                     color = col_res, style = line.style_dotted, width = 1, extend = extend.right)
+                tp_line := line.new(bar_index, bt_tp, bar_index + 1, bt_tp,
+                     color = col_sup, style = line.style_dotted, width = 1, extend = extend.right)
+            label.new(bar_index, high, "SELL\nR:R " + str.tostring(bt_last_rr, "#.#") + ":1\nConf " + str.tostring(conf_bear) + "/5",
+                 style = label.style_label_down, color = col_res, textcolor = color.white, size = size.normal)
 
 // ═══════════════════════════════════════════════════════════════
 //  МЕДЛЕННЫЕ: ОБНАРУЖЕНИЕ ПРОБОЯ
@@ -1193,7 +1448,7 @@ else if pend_bull_key >= 0 and bar_index > pend_bull_lb and barstate.isconfirmed
 //  БЫСТРЫЕ ЛИНИИ: ОБНАРУЖЕНИЕ ПРОБОЯ
 // ═══════════════════════════════════════════════════════════════
 
-if use_fast and fast_len < swing_len
+if use_fast and fast_len < eff_swing_len
     if not na(fsup_ln) and bar_index > fsup_cd_bar and bar_index > fsup_x1
         flp = calc_line_at(fsup_x1, fsup_y1, fsup_x2, fsup_y2, bar_index)
         fwd = low < flp - min_dist
@@ -1239,28 +1494,27 @@ plotshape(show_tent and bear_tent and not bear_break, title = "Bear Tent", style
 bgcolor(bull_break and not bear_break and show_bg ? bg_up : na, title = "Bull BG")
 bgcolor(bear_break and not bull_break and show_bg ? bg_dn : na, title = "Bear BG")
 
-// SMC: BOS/CHOCH labels with confluence score
-if use_smc and show_bos and smc_is_bos_bull
+// BOS/CHOCH labels with confluence
+if use_smc and show_bos and smc_is_bos_bull and conf_bull >= smc_min_conf
     label.new(bar_index, low, "BOS " + str.tostring(conf_bull) + "/5",
          style = label.style_label_up, color = col_bos, textcolor = color.white, size = size.small)
-if use_smc and show_bos and smc_is_bos_bear
+if use_smc and show_bos and smc_is_bos_bear and conf_bear >= smc_min_conf
     label.new(bar_index, high, "BOS " + str.tostring(conf_bear) + "/5",
          style = label.style_label_down, color = col_bos, textcolor = color.white, size = size.small)
-if use_smc and show_choch and smc_is_choch_bull
+if use_smc and show_choch and smc_is_choch_bull and conf_bull >= smc_min_conf
     label.new(bar_index, low, "CHOCH " + str.tostring(conf_bull) + "/5",
          style = label.style_label_up, color = col_choch, textcolor = color.white, size = size.normal)
-if use_smc and show_choch and smc_is_choch_bear
+if use_smc and show_choch and smc_is_choch_bear and conf_bear >= smc_min_conf
     label.new(bar_index, high, "CHOCH " + str.tostring(conf_bear) + "/5",
          style = label.style_label_down, color = col_choch, textcolor = color.white, size = size.normal)
 
-// Displacement markers
 plotshape(use_smc and is_displacement and close > open, title = "Disp Bull",
      style = shape.diamond, location = location.belowbar, color = color.new(col_bos, 60), size = size.tiny)
 plotshape(use_smc and is_displacement and close < open, title = "Disp Bear",
      style = shape.diamond, location = location.abovebar, color = color.new(col_choch, 60), size = size.tiny)
 
 // ═══════════════════════════════════════════════════════════════
-//  PREMIUM / DISCOUNT ZONES
+//  PREMIUM / DISCOUNT + KILL ZONES + CANDLE COLORING
 // ═══════════════════════════════════════════════════════════════
 
 bgcolor(use_smc and show_pd and in_premium ? col_premium : na, title = "Premium Zone")
@@ -1268,11 +1522,18 @@ bgcolor(use_smc and show_pd and in_discount ? col_discount : na, title = "Discou
 plot(use_smc and show_pd and not na(pd_mid) ? pd_mid : na, "Equilibrium",
      color = color.new(color.gray, 50), style = plot.style_cross)
 
+bgcolor(show_kz and in_any_kz ? col_kz : na, title = "Kill Zone BG")
+
+barcolor(use_candle_color ?
+     (mkt_structure == 1 and in_discount ? color.new(col_sup, 20) :
+      mkt_structure == -1 and in_premium ? color.new(col_res, 20) :
+      color.new(color.gray, 50)) : na, title = "Structure Candle Color")
+
 // ═══════════════════════════════════════════════════════════════
 //  ИНФОРМАЦИОННАЯ ПАНЕЛЬ (РУССКИЙ)
 // ═══════════════════════════════════════════════════════════════
 
-var table tbl = table.new(position.top_right, 2, 14,
+var table tbl = table.new(position.top_right, 2, 18,
      bgcolor = color.new(#1E1E1E, 10), border_color = color.new(color.gray, 60), border_width = 1)
 
 if barstate.islast
@@ -1300,10 +1561,10 @@ if barstate.islast
     table.cell(tbl, 1, 1, str.tostring(sc) + " П / " + str.tostring(rc) + " С", text_color = color.white, text_size = size.small)
 
     string tfm = trend_mode == "EMA Cross" ? "Cross" : trend_mode == "Price vs EMA" ? "Price" : "ВЫКЛ"
-    bool bt = trend_bull_ok
+    bool bt2 = trend_bull_ok
     table.cell(tbl, 0, 2, "Тренд", text_color = color.gray, text_size = size.small)
-    table.cell(tbl, 1, 2, trend_mode == "Off" ? "ВЫКЛ" : (bt ? tfm + ":БЫК" : tfm + ":МЕДВ"),
-         text_color = trend_mode == "Off" ? color.gray : (bt ? col_sup : col_res), text_size = size.small)
+    table.cell(tbl, 1, 2, trend_mode == "Off" ? "ВЫКЛ" : (bt2 ? tfm + ":БЫК" : tfm + ":МЕДВ"),
+         text_color = trend_mode == "Off" ? color.gray : (bt2 ? col_sup : col_res), text_size = size.small)
 
     table.cell(tbl, 0, 3, "Поддержка", text_color = color.gray, text_size = size.small)
     table.cell(tbl, 1, 3, not na(bs) ? str.tostring(bs, format.mintick) : "---", text_color = not na(bs) ? col_sup : color.gray, text_size = size.small)
@@ -1341,19 +1602,61 @@ if barstate.islast
     table.cell(tbl, 1, 11, zone_txt, text_color = zone_col, text_size = size.small)
 
     table.cell(tbl, 0, 12, "OB / FVG", text_color = color.gray, text_size = size.small)
-    string ob_fvg_txt = use_smc ? str.tostring(array.size(ob_boxes)) + " / " + str.tostring(array.size(fvg_boxes)) : "ВЫКЛ"
-    table.cell(tbl, 1, 12, ob_fvg_txt, text_color = color.white, text_size = size.small)
+    table.cell(tbl, 1, 12, use_smc ? str.tostring(array.size(ob_boxes)) + " / " + str.tostring(array.size(fvg_boxes)) : "ВЫКЛ",
+         text_color = color.white, text_size = size.small)
 
     table.cell(tbl, 0, 13, "Confluence", text_color = color.gray, text_size = size.small)
-    string conf_txt = use_smc ? str.tostring(confluence) + "/5" : "ВЫКЛ"
     color  conf_col = confluence >= 4 ? col_sup : confluence >= 2 ? color.yellow : color.gray
-    table.cell(tbl, 1, 13, conf_txt, text_color = use_smc ? conf_col : color.gray, text_size = size.small)
+    table.cell(tbl, 1, 13, use_smc ? str.tostring(confluence) + "/5" : "ВЫКЛ",
+         text_color = use_smc ? conf_col : color.gray, text_size = size.small)
+
+    table.cell(tbl, 0, 14, "Kill Zone", text_color = color.gray, text_size = size.small)
+    string kz_txt = not show_kz ? "ВЫКЛ" : in_kz_london ? "ЛОНДОН" : in_kz_ny_open ? "НЬЮ-ЙОРК" : in_kz_ny_close ? "SILVER BULLET" : "---"
+    table.cell(tbl, 1, 14, kz_txt, text_color = in_any_kz and show_kz ? color.orange : color.gray, text_size = size.small)
+
+    table.cell(tbl, 0, 15, "Сигнал", text_color = color.gray, text_size = size.small)
+    string sig_txt = bt_in_trade ? (bt_dir == 1 ? "BUY" : "SELL") : "---"
+    color  sig_col = bt_in_trade ? (bt_dir == 1 ? col_sup : col_res) : color.gray
+    table.cell(tbl, 1, 15, show_composite ? sig_txt : "ВЫКЛ", text_color = sig_col, text_size = size.small)
+
+    table.cell(tbl, 0, 16, "R:R", text_color = color.gray, text_size = size.small)
+    table.cell(tbl, 1, 16, bt_in_trade ? str.tostring(bt_last_rr, "#.#") + ":1" : "---",
+         text_color = bt_in_trade ? color.white : color.gray, text_size = size.small)
+
+    table.cell(tbl, 0, 17, "Win Rate", text_color = color.gray, text_size = size.small)
+    float wr = bt_total > 0 ? bt_wins * 100.0 / bt_total : 0
+    float avg_rr = bt_wins > 0 ? bt_sum_rr / bt_wins : 0
+    string wr_txt = show_stats and bt_total > 0 ? str.tostring(math.round(wr)) + "% (" + str.tostring(bt_wins) + "/" + str.tostring(bt_total) + ") R:" + str.tostring(avg_rr, "#.#") : "---"
+    table.cell(tbl, 1, 17, wr_txt, text_color = wr >= 50 ? col_sup : bt_total > 0 ? col_res : color.gray, text_size = size.small)
 
 // ═══════════════════════════════════════════════════════════════
-//  АЛЕРТЫ (базовые + обогащённые)
+//  MULTI-SYMBOL PANEL
 // ═══════════════════════════════════════════════════════════════
 
-// Базовые alertcondition (совместимость)
+var table tbl2 = table.new(position.bottom_right, 3, 3,
+     bgcolor = color.new(#1E1E1E, 10), border_color = color.new(color.gray, 60), border_width = 1)
+
+if show_multi and barstate.islast
+    table.cell(tbl2, 0, 0, "Символ", text_color = color.gray, text_size = size.small)
+    table.cell(tbl2, 1, 0, "Тренд", text_color = color.gray, text_size = size.small)
+    table.cell(tbl2, 2, 0, "EMA", text_color = color.gray, text_size = size.small)
+
+    // Symbol 1
+    string s1_name = str.contains(sym1_input, ":") ? str.substring(sym1_input, str.pos(sym1_input, ":") + 1) : sym1_input
+    table.cell(tbl2, 0, 1, s1_name, text_color = color.white, text_size = size.small)
+    table.cell(tbl2, 1, 1, sym1_bull ? "БЫК" : "МЕДВ", text_color = sym1_bull ? col_sup : col_res, text_size = size.small)
+    table.cell(tbl2, 2, 1, not na(sym1_ef) ? str.tostring(sym1_ef, format.mintick) : "---", text_color = color.gray, text_size = size.small)
+
+    // Symbol 2
+    string s2_name = str.contains(sym2_input, ":") ? str.substring(sym2_input, str.pos(sym2_input, ":") + 1) : sym2_input
+    table.cell(tbl2, 0, 2, s2_name, text_color = color.white, text_size = size.small)
+    table.cell(tbl2, 1, 2, sym2_bull ? "БЫК" : "МЕДВ", text_color = sym2_bull ? col_sup : col_res, text_size = size.small)
+    table.cell(tbl2, 2, 2, not na(sym2_ef) ? str.tostring(sym2_ef, format.mintick) : "---", text_color = color.gray, text_size = size.small)
+
+// ═══════════════════════════════════════════════════════════════
+//  АЛЕРТЫ
+// ═══════════════════════════════════════════════════════════════
+
 alertcondition(bull_break and alr_bull, "Bullish Break",
      "Bullish break on {{ticker}} {{interval}} at {{close}}")
 alertcondition(bear_break and alr_bear, "Bearish Break",
@@ -1372,20 +1675,30 @@ alertcondition((sweep_bull or sweep_bear) and alr_sweep, "Liquidity Sweep",
      "Liquidity sweep on {{ticker}} {{interval}} at {{close}}")
 alertcondition(idm_swept and alr_induce, "Inducement (IDM)",
      "Inducement swept on {{ticker}} {{interval}} at {{close}}")
+alertcondition((composite_buy or composite_sell) and alr_composite, "Composite Signal",
+     "Composite signal on {{ticker}} {{interval}} at {{close}}")
+alertcondition((sfp_bull or sfp_bear) and alr_sfp, "SFP",
+     "SFP on {{ticker}} {{interval}} at {{close}}")
 
-// Обогащённые alert() с контекстом
+// Enriched alerts
 string zone_str = in_premium ? "ПРЕМИУМ" : in_discount ? "ДИСКОНТ" : "EQ"
 string struct_str = mkt_structure == 1 ? "БЫЧЬЯ" : mkt_structure == -1 ? "МЕДВЕЖЬЯ" : "---"
 
 if smc_is_bos_bull and alr_bos
-    alert("BOS UP | " + syminfo.ticker + " " + timeframe.period + " | Цена: " + str.tostring(close, format.mintick) + " | Структура: " + struct_str + " | Зона: " + zone_str + " | Confluence: " + str.tostring(conf_bull) + "/5", alert.freq_once_per_bar)
+    alert("BOS UP | " + syminfo.ticker + " " + timeframe.period + " | " + str.tostring(close, format.mintick) + " | " + struct_str + " | " + zone_str + " | Conf:" + str.tostring(conf_bull) + "/5", alert.freq_once_per_bar)
 if smc_is_bos_bear and alr_bos
-    alert("BOS DN | " + syminfo.ticker + " " + timeframe.period + " | Цена: " + str.tostring(close, format.mintick) + " | Структура: " + struct_str + " | Зона: " + zone_str + " | Confluence: " + str.tostring(conf_bear) + "/5", alert.freq_once_per_bar)
+    alert("BOS DN | " + syminfo.ticker + " " + timeframe.period + " | " + str.tostring(close, format.mintick) + " | " + struct_str + " | " + zone_str + " | Conf:" + str.tostring(conf_bear) + "/5", alert.freq_once_per_bar)
 if smc_is_choch_bull and alr_choch
-    alert("CHOCH UP | " + syminfo.ticker + " " + timeframe.period + " | Цена: " + str.tostring(close, format.mintick) + " | Новая структура: БЫЧЬЯ | Зона: " + zone_str + " | Confluence: " + str.tostring(conf_bull) + "/5", alert.freq_once_per_bar)
+    alert("CHOCH UP | " + syminfo.ticker + " " + timeframe.period + " | " + str.tostring(close, format.mintick) + " | БЫЧЬЯ | " + zone_str + " | Conf:" + str.tostring(conf_bull) + "/5", alert.freq_once_per_bar)
 if smc_is_choch_bear and alr_choch
-    alert("CHOCH DN | " + syminfo.ticker + " " + timeframe.period + " | Цена: " + str.tostring(close, format.mintick) + " | Новая структура: МЕДВЕЖЬЯ | Зона: " + zone_str + " | Confluence: " + str.tostring(conf_bear) + "/5", alert.freq_once_per_bar)
+    alert("CHOCH DN | " + syminfo.ticker + " " + timeframe.period + " | " + str.tostring(close, format.mintick) + " | МЕДВЕЖЬЯ | " + zone_str + " | Conf:" + str.tostring(conf_bear) + "/5", alert.freq_once_per_bar)
+if composite_buy and alr_composite
+    alert("BUY | " + syminfo.ticker + " " + timeframe.period + " | " + str.tostring(close, format.mintick) + " | SL:" + str.tostring(bt_sl, format.mintick) + " | TP:" + str.tostring(bt_tp, format.mintick) + " | R:R " + str.tostring(bt_last_rr, "#.#") + ":1 | Conf:" + str.tostring(conf_bull) + "/5", alert.freq_once_per_bar)
+if composite_sell and alr_composite
+    alert("SELL | " + syminfo.ticker + " " + timeframe.period + " | " + str.tostring(close, format.mintick) + " | SL:" + str.tostring(bt_sl, format.mintick) + " | TP:" + str.tostring(bt_tp, format.mintick) + " | R:R " + str.tostring(bt_last_rr, "#.#") + ":1 | Conf:" + str.tostring(conf_bear) + "/5", alert.freq_once_per_bar)
+if (sfp_bull or sfp_bear) and alr_sfp
+    alert("SFP | " + syminfo.ticker + " " + timeframe.period + " | " + str.tostring(close, format.mintick) + " | " + struct_str + " | " + zone_str, alert.freq_once_per_bar)
 if (sweep_bull or sweep_bear) and alr_sweep
-    alert("SWEEP | " + syminfo.ticker + " " + timeframe.period + " | Цена: " + str.tostring(close, format.mintick) + " | Структура: " + struct_str, alert.freq_once_per_bar)
+    alert("SWEEP | " + syminfo.ticker + " " + timeframe.period + " | " + str.tostring(close, format.mintick) + " | " + struct_str, alert.freq_once_per_bar)
 if idm_swept and alr_induce
-    alert("IDM | " + syminfo.ticker + " " + timeframe.period + " | Цена: " + str.tostring(close, format.mintick) + " | Структура: " + struct_str + " | Зона: " + zone_str, alert.freq_once_per_bar)
+    alert("IDM | " + syminfo.ticker + " " + timeframe.period + " | " + str.tostring(close, format.mintick) + " | " + struct_str + " | " + zone_str, alert.freq_once_per_bar)
