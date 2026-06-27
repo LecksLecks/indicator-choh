@@ -281,6 +281,16 @@ var bool[]  res_cd = array.new_bool(0)
 
 var line[] hist_lines = array.new_line(0)
 
+// Ghost lines — broken but kept for N bars before full removal
+var line[]  ghost_lines = array.new_line(0)
+var int[]   ghost_bars  = array.new_int(0)
+var int[]   ghost_x1    = array.new_int(0)
+var float[] ghost_y1    = array.new_float(0)
+var int[]   ghost_x2    = array.new_int(0)
+var float[] ghost_y2    = array.new_float(0)
+var int[]   ghost_dir   = array.new_int(0)
+int ghost_ttl = 10
+
 var int pend_bear_key = -1
 var int pend_bear_cnt = 0
 var int pend_bear_lb  = -1
@@ -482,9 +492,15 @@ remove_sup(int idx) =>
         ln = array.get(sup_pool, idx)
         if not na(ln)
             line.set_style(ln, line.style_dotted)
-            line.set_color(ln, color.new(col_sup, 50))
-            array.push(hist_lines, ln)
-            clean_hist()
+            line.set_color(ln, color.new(col_sup, 70))
+            // Keep as ghost for potential re-use
+            array.push(ghost_lines, ln)
+            array.push(ghost_bars, bar_index)
+            array.push(ghost_x1, array.get(sup_x1, idx))
+            array.push(ghost_y1, array.get(sup_y1, idx))
+            array.push(ghost_x2, array.get(sup_x2, idx))
+            array.push(ghost_y2, array.get(sup_y2, idx))
+            array.push(ghost_dir, 1)
         array.remove(sup_pool, idx)
         array.remove(sup_x1, idx)
         array.remove(sup_y1, idx)
@@ -497,9 +513,15 @@ remove_res(int idx) =>
         ln = array.get(res_pool, idx)
         if not na(ln)
             line.set_style(ln, line.style_dotted)
-            line.set_color(ln, color.new(col_res, 50))
-            array.push(hist_lines, ln)
-            clean_hist()
+            line.set_color(ln, color.new(col_res, 70))
+            // Keep as ghost for potential re-use
+            array.push(ghost_lines, ln)
+            array.push(ghost_bars, bar_index)
+            array.push(ghost_x1, array.get(res_x1, idx))
+            array.push(ghost_y1, array.get(res_y1, idx))
+            array.push(ghost_x2, array.get(res_x2, idx))
+            array.push(ghost_y2, array.get(res_y2, idx))
+            array.push(ghost_dir, -1)
         array.remove(res_pool, idx)
         array.remove(res_x1, idx)
         array.remove(res_y1, idx)
@@ -1110,9 +1132,12 @@ if use_smc and show_fvg and barstate.isconfirmed and bar_index > 2
 //  SMC: LIQUIDITY DETECTION
 // ═══════════════════════════════════════════════════════════════
 
+// Auto-scale eq threshold by TF
+float eff_eq_pct = tf_secs >= 86400 ? math.max(eq_atr_pct, 0.2) : tf_secs >= 14400 ? math.max(eq_atr_pct, 0.15) : eq_atr_pct
+
 if use_smc and show_liq and not na(atr)
     if not na(pivot_h) and not na(prev_sh_price) and not na(key_sh)
-        eq_thresh = atr * eq_atr_pct
+        eq_thresh = atr * eff_eq_pct
         if math.abs(key_sh - prev_sh_price) < eq_thresh
             if array.size(liq_lines) >= liq_max
                 line.delete(array.shift(liq_lines))
@@ -1125,7 +1150,7 @@ if use_smc and show_liq and not na(atr)
             array.push(liq_prices, avg_p)
             array.push(liq_dirs, 1)
     if not na(pivot_l) and not na(prev_sl_price) and not na(key_sl)
-        eq_thresh = atr * eq_atr_pct
+        eq_thresh = atr * eff_eq_pct
         if math.abs(key_sl - prev_sl_price) < eq_thresh
             if array.size(liq_lines) >= liq_max
                 line.delete(array.shift(liq_lines))
@@ -1227,8 +1252,9 @@ if use_mtf and htf_s > 0
     conf_bull += 1
 if use_mtf and htf_s < 0
     conf_bear += 1
-if vol_ok
+if vol_ok and close > open
     conf_bull += 1
+if vol_ok and close < open
     conf_bear += 1
 if near_ob_bull or near_fvg_bull
     conf_bull += 1
@@ -1568,6 +1594,56 @@ else if pend_bull_key >= 0 and bar_index > pend_bull_lb and barstate.isconfirmed
     pend_bull_key := -1
     pend_bull_cnt := 0
     pend_bull_lb  := -1
+
+// Ghost line cleanup + reclaim detection
+if array.size(ghost_lines) > 0
+    int gi = array.size(ghost_lines) - 1
+    while gi >= 0
+        int age = bar_index - array.get(ghost_bars, gi)
+        if age >= ghost_ttl
+            line.delete(array.get(ghost_lines, gi))
+            array.remove(ghost_lines, gi)
+            array.remove(ghost_bars, gi)
+            array.remove(ghost_x1, gi)
+            array.remove(ghost_y1, gi)
+            array.remove(ghost_x2, gi)
+            array.remove(ghost_y2, gi)
+            array.remove(ghost_dir, gi)
+        else
+            // Check if price reclaimed the ghost line (false break)
+            float gp = calc_line_at(array.get(ghost_x1, gi), array.get(ghost_y1, gi), array.get(ghost_x2, gi), array.get(ghost_y2, gi), bar_index)
+            int gd = array.get(ghost_dir, gi)
+            bool reclaimed = gd == 1 ? (close > gp and low >= gp - min_dist) : (close < gp and high <= gp + min_dist)
+            if reclaimed and barstate.isconfirmed
+                line gln = array.get(ghost_lines, gi)
+                if gd == 1
+                    line.set_style(gln, line.style_solid)
+                    line.set_color(gln, col_sup)
+                    retire_sup()
+                    array.push(sup_pool, gln)
+                    array.push(sup_x1, array.get(ghost_x1, gi))
+                    array.push(sup_y1, array.get(ghost_y1, gi))
+                    array.push(sup_x2, array.get(ghost_x2, gi))
+                    array.push(sup_y2, array.get(ghost_y2, gi))
+                    array.push(sup_cd, true)
+                else
+                    line.set_style(gln, line.style_solid)
+                    line.set_color(gln, col_res)
+                    retire_res()
+                    array.push(res_pool, gln)
+                    array.push(res_x1, array.get(ghost_x1, gi))
+                    array.push(res_y1, array.get(ghost_y1, gi))
+                    array.push(res_x2, array.get(ghost_x2, gi))
+                    array.push(res_y2, array.get(ghost_y2, gi))
+                    array.push(res_cd, true)
+                array.remove(ghost_lines, gi)
+                array.remove(ghost_bars, gi)
+                array.remove(ghost_x1, gi)
+                array.remove(ghost_y1, gi)
+                array.remove(ghost_x2, gi)
+                array.remove(ghost_y2, gi)
+                array.remove(ghost_dir, gi)
+        gi -= 1
 
 // ═══════════════════════════════════════════════════════════════
 //  БЫСТРЫЕ ЛИНИИ: ОБНАРУЖЕНИЕ ПРОБОЯ
