@@ -1,11 +1,12 @@
 // This Pine Script™ indicator is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
-// © Trend Break Detector v6
+// © Trend Break Detector v6 + SMC
 
 //@version=6
-indicator("Trend Break Detector v6", "TBDv6", overlay = true, max_lines_count = 500, max_labels_count = 500)
+indicator("Trend Break Detector v6 + SMC", "TBDv6+SMC", overlay = true,
+     max_lines_count = 500, max_labels_count = 500, max_boxes_count = 500)
 
 // ═══════════════════════════════════════════════════════════════
-//  НАСТРОЙКИ
+//  НАСТРОЙКИ — SWING DETECTION
 // ═══════════════════════════════════════════════════════════════
 
 string GRP_SWING = "══ Swing Detection ══"
@@ -14,6 +15,10 @@ int    swing_len = input.int(5, "Slow Swing Length", minval = 2, maxval = 50, gr
 bool   use_fast  = input.bool(true, "Fast Lines (early signals)", group = GRP_SWING,
      tooltip = "Линии по пивотам с половинной длиной — раньше видят разворот.")
 
+// ═══════════════════════════════════════════════════════════════
+//  НАСТРОЙКИ — TREND LINES
+// ═══════════════════════════════════════════════════════════════
+
 string GRP_LINE  = "══ Trend Lines ══"
 int    lw        = input.int(2, "Trend Line Width", minval = 1, maxval = 4, group = GRP_LINE)
 color  col_sup   = input.color(#00BFA5, "Support Color (bull)", group = GRP_LINE)
@@ -21,7 +26,11 @@ color  col_res   = input.color(#FF1744, "Resistance Color (bear)", group = GRP_L
 bool   extend_r  = input.bool(true, "Extend Line Right", group = GRP_LINE)
 int    pool_size = input.int(3, "Max Active Lines / dir", minval = 1, maxval = 10, group = GRP_LINE)
 int    min_slope_bars = input.int(0, "Min Slope Bars (0=auto)", minval = 0, maxval = 50, group = GRP_LINE,
-     tooltip = "0 = auto (2× swing_len). Отсекает слишком крутые линии.")
+     tooltip = "0 = auto (2x swing_len). Отсекает слишком крутые линии.")
+
+// ═══════════════════════════════════════════════════════════════
+//  НАСТРОЙКИ — BREAK DETECTION
+// ═══════════════════════════════════════════════════════════════
 
 string GRP_BRK   = "══ Break Detection ══"
 string mode      = input.string("Close", "Break Source", options = ["Wick","Close","Both"], group = GRP_BRK)
@@ -40,6 +49,62 @@ string mom_mode  = input.string("RSI", "Momentum Filter", options = ["Off","RSI"
 int    rsi_len   = input.int(14, "RSI Length", minval = 2, group = GRP_BRK)
 int    max_hist  = input.int(50, "Max Historical Lines", minval = 5, maxval = 200, group = GRP_BRK)
 
+// ═══════════════════════════════════════════════════════════════
+//  НАСТРОЙКИ — SMC / STRUCTURE
+// ═══════════════════════════════════════════════════════════════
+
+string GRP_SMC   = "══ SMC / Structure ══"
+bool   use_smc   = input.bool(true, "Enable SMC Module", group = GRP_SMC)
+bool   show_bos  = input.bool(true, "Show BOS Signals", group = GRP_SMC)
+bool   show_choch = input.bool(true, "Show CHOCH Signals", group = GRP_SMC)
+bool   show_swing_lvl = input.bool(true, "Show Swing Level Lines", group = GRP_SMC)
+color  col_bos   = input.color(#2962FF, "BOS Color", group = GRP_SMC)
+color  col_choch = input.color(#E040FB, "CHOCH Color", group = GRP_SMC)
+
+string GRP_DISP  = "══ Displacement ══"
+float  disp_mul  = input.float(1.5, "Displacement Body Multiplier", minval = 1.0, step = 0.1, group = GRP_DISP,
+     tooltip = "Свеча импульсная если тело > avg_body x этот множитель.")
+bool   req_disp  = input.bool(false, "Require Displacement for SMC Break", group = GRP_DISP,
+     tooltip = "Если включено, BOS/CHOCH только при импульсной свече.")
+
+string GRP_OB    = "══ Order Blocks ══"
+bool   show_ob   = input.bool(true, "Show Order Blocks", group = GRP_OB)
+int    ob_max    = input.int(5, "Max Active Order Blocks", minval = 1, maxval = 20, group = GRP_OB)
+int    ob_lookback = input.int(10, "OB Lookback Bars", minval = 3, maxval = 30, group = GRP_OB)
+bool   ob_mitigate = input.bool(true, "Remove Mitigated OBs", group = GRP_OB,
+     tooltip = "Убирать OB когда цена закрывается за его границей.")
+color  col_ob_bull = input.color(color.new(#00BFA5, 80), "Bullish OB Color", group = GRP_OB)
+color  col_ob_bear = input.color(color.new(#FF1744, 80), "Bearish OB Color", group = GRP_OB)
+
+string GRP_FVG   = "══ Fair Value Gaps ══"
+bool   show_fvg  = input.bool(true, "Show FVG Zones", group = GRP_FVG)
+int    fvg_max   = input.int(5, "Max Active FVGs", minval = 1, maxval = 20, group = GRP_FVG)
+bool   fvg_remove_filled = input.bool(true, "Remove Filled FVGs", group = GRP_FVG)
+color  col_fvg_bull = input.color(color.new(#00BFA5, 85), "Bullish FVG Color", group = GRP_FVG)
+color  col_fvg_bear = input.color(color.new(#FF1744, 85), "Bearish FVG Color", group = GRP_FVG)
+
+string GRP_LIQ   = "══ Liquidity ══"
+bool   show_liq  = input.bool(true, "Show Equal H/L Liquidity", group = GRP_LIQ)
+float  eq_atr_pct = input.float(0.1, "Equal Level ATR Threshold", minval = 0.01, step = 0.01, group = GRP_LIQ,
+     tooltip = "Два свинга = equal если разница < ATR x порог.")
+bool   show_sweep = input.bool(true, "Mark Liquidity Sweeps", group = GRP_LIQ)
+color  col_liq   = input.color(color.new(#FFD600, 50), "Liquidity Level Color", group = GRP_LIQ)
+int    liq_max   = input.int(5, "Max Liquidity Levels", minval = 1, maxval = 10, group = GRP_LIQ)
+
+string GRP_PD    = "══ Premium / Discount ══"
+bool   show_pd   = input.bool(false, "Show Premium/Discount Zones", group = GRP_PD)
+color  col_premium = input.color(color.new(#FF1744, 93), "Premium Zone Color", group = GRP_PD)
+color  col_discount = input.color(color.new(#00BFA5, 93), "Discount Zone Color", group = GRP_PD)
+
+string GRP_MTF   = "══ Multi-Timeframe ══"
+bool   use_mtf   = input.bool(false, "Enable MTF Confirmation", group = GRP_MTF,
+     tooltip = "Бычий сигнал только если старший ТФ не медвежий. +1 бар задержка HTF.")
+string htf       = input.timeframe("15", "Higher Timeframe", group = GRP_MTF)
+
+// ═══════════════════════════════════════════════════════════════
+//  НАСТРОЙКИ — VISUALS
+// ═══════════════════════════════════════════════════════════════
+
 string GRP_VIS   = "══ Visuals ══"
 bool   show_bg   = input.bool(true, "Highlight Break Bars", group = GRP_VIS)
 color  bg_up     = input.color(color.new(#00BFA5, 90), "Bull BG Color", group = GRP_VIS)
@@ -50,11 +115,18 @@ bool   show_ema  = input.bool(true, "Show EMA Cloud", group = GRP_VIS)
 int    ema_fl    = input.int(20, "EMA Fast", group = GRP_VIS)
 int    ema_sl    = input.int(50, "EMA Slow", group = GRP_VIS)
 
+// ═══════════════════════════════════════════════════════════════
+//  НАСТРОЙКИ — ALERTS
+// ═══════════════════════════════════════════════════════════════
+
 string GRP_ALR   = "══ Alerts ══"
 bool   alr_bull  = input.bool(true, "Alert: Bullish Break", group = GRP_ALR)
 bool   alr_bear  = input.bool(true, "Alert: Bearish Break", group = GRP_ALR)
 bool   alr_fast  = input.bool(true, "Alert: Fast Break", group = GRP_ALR)
 bool   alr_tent  = input.bool(false, "Alert: Tentative", group = GRP_ALR)
+bool   alr_bos   = input.bool(true, "Alert: BOS", group = GRP_ALR)
+bool   alr_choch = input.bool(true, "Alert: CHOCH", group = GRP_ALR)
+bool   alr_sweep = input.bool(true, "Alert: Liquidity Sweep", group = GRP_ALR)
 
 // ═══════════════════════════════════════════════════════════════
 //  ПРИМИТИВЫ
@@ -99,6 +171,10 @@ get_mom_bear() =>
 
 mom_bull_ok = get_mom_bull()
 mom_bear_ok = get_mom_bear()
+
+candle_body = math.abs(close - open)
+is_displacement = not na(avg_body) and avg_body > 0 and candle_body > avg_body * disp_mul
+disp_ok = not req_disp or is_displacement
 
 // ═══════════════════════════════════════════════════════════════
 //  СОСТОЯНИЕ — МЕДЛЕННЫЕ ЛИНИИ
@@ -158,12 +234,67 @@ var int   fres_x2 = -1
 var float fres_y2 = na
 var int   fres_cd_bar = -1
 
+// ═══════════════════════════════════════════════════════════════
+//  СОСТОЯНИЕ — SMC / СТРУКТУРА
+// ═══════════════════════════════════════════════════════════════
+
+var int   mkt_structure = 0    // 1=bullish, -1=bearish, 0=undefined
+var float key_sh = na          // текущий ключевой swing high (уровень для пробоя вверх)
+var int   key_sh_bar = -1
+var float key_sl = na          // текущий ключевой swing low (уровень для пробоя вниз)
+var int   key_sl_bar = -1
+var float prev_sh_price = na   // предыдущий swing high (для определения HH/LH)
+var float prev_sl_price = na   // предыдущий swing low (для определения HL/LL)
+var bool  sh_broken = true     // ключевой SH уже пробит?
+var bool  sl_broken = true     // ключевой SL уже пробит?
+
+var line  swing_h_line = na
+var line  swing_l_line = na
+
+// Order Block
+var box[]   ob_boxes = array.new_box(0)
+var float[] ob_tops  = array.new_float(0)
+var float[] ob_bots  = array.new_float(0)
+var int[]   ob_dirs  = array.new_int(0)
+
+// Fair Value Gap
+var box[]   fvg_boxes = array.new_box(0)
+var float[] fvg_tops  = array.new_float(0)
+var float[] fvg_bots  = array.new_float(0)
+var int[]   fvg_dirs  = array.new_int(0)
+
+// Liquidity
+var line[]  liq_lines  = array.new_line(0)
+var float[] liq_prices = array.new_float(0)
+var int[]   liq_dirs   = array.new_int(0)  // 1=equal highs, -1=equal lows
+
+// ═══════════════════════════════════════════════════════════════
+//  ФЛАГИ СИГНАЛОВ
+// ═══════════════════════════════════════════════════════════════
+
 bull_break = false
 bear_break = false
 bull_tent  = false
 bear_tent  = false
 fast_bull  = false
 fast_bear  = false
+smc_bull   = false
+smc_bear   = false
+smc_is_bos_bull   = false
+smc_is_choch_bull = false
+smc_is_bos_bear   = false
+smc_is_choch_bear = false
+sweep_bull = false
+sweep_bear = false
+
+// ═══════════════════════════════════════════════════════════════
+//  MTF (request.security — глобальный уровень)
+// ═══════════════════════════════════════════════════════════════
+
+htf_struct = request.security(syminfo.tickerid, htf, mkt_structure, barmerge.gaps_off, barmerge.lookahead_off)
+int htf_s = use_mtf and not na(htf_struct) ? htf_struct : 0
+bool mtf_bull_ok = not use_mtf or htf_s >= 0
+bool mtf_bear_ok = not use_mtf or htf_s <= 0
 
 // ═══════════════════════════════════════════════════════════════
 //  ПОМОЩНИКИ
@@ -251,8 +382,8 @@ body_bear_ok(float lp) =>
         (lp - src) > avg_body
 
 // ═══════════════════════════════════════════════════════════════
-//  МЕДЛЕННЫЕ ПИВОТЫ + ЛИНИИ
-// ═════════════════════════════════════════════════════════════
+//  МЕДЛЕННЫЕ ПИВОТЫ + ЛИНИИ + SMC SWING TRACKING
+// ═══════════════════════════════════════════════════════════════
 
 pivot_h = ta.pivothigh(high, swing_len, swing_len)
 pivot_l = ta.pivotlow(low, swing_len, swing_len)
@@ -279,6 +410,15 @@ if not na(pivot_h)
             array.unshift(res_x2, x2)
             array.unshift(res_y2, y2)
             array.unshift(res_cd, true)
+    // SMC: обновить swing high
+    if use_smc
+        prev_sh_price := key_sh
+        key_sh := hp
+        key_sh_bar := bh
+        sh_broken := false
+        if not na(swing_h_line)
+            line.delete(swing_h_line)
+            swing_h_line := na
 
 if not na(pivot_l)
     bl = bar_index - swing_len
@@ -302,6 +442,15 @@ if not na(pivot_l)
             array.unshift(sup_x2, x2)
             array.unshift(sup_y2, y2)
             array.unshift(sup_cd, true)
+    // SMC: обновить swing low
+    if use_smc
+        prev_sl_price := key_sl
+        key_sl := lp
+        key_sl_bar := bl
+        sl_broken := false
+        if not na(swing_l_line)
+            line.delete(swing_l_line)
+            swing_l_line := na
 
 // ═══════════════════════════════════════════════════════════════
 //  БЫСТРЫЕ ПИВОТЫ + ЛИНИИ
@@ -386,6 +535,243 @@ if barstate.islast and extend_r
     if not na(fres_ln)
         ey = calc_line_at(fres_x1, fres_y1, fres_x2, fres_y2, bar_index + 5)
         line.set_xy2(fres_ln, bar_index + 5, ey)
+
+// ═══════════════════════════════════════════════════════════════
+//  SMC: MITIGATION / FILL CHECK (до создания новых)
+// ═══════════════════════════════════════════════════════════════
+
+// OB mitigation
+if use_smc and show_ob and ob_mitigate and array.size(ob_boxes) > 0
+    for i = array.size(ob_boxes) - 1 to 0
+        d = array.get(ob_dirs, i)
+        t = array.get(ob_tops, i)
+        b = array.get(ob_bots, i)
+        mitigated = d == 1 ? close < b : close > t
+        if mitigated
+            box.delete(array.get(ob_boxes, i))
+            array.remove(ob_boxes, i)
+            array.remove(ob_tops, i)
+            array.remove(ob_bots, i)
+            array.remove(ob_dirs, i)
+
+// FVG fill check
+if use_smc and show_fvg and fvg_remove_filled and array.size(fvg_boxes) > 0
+    for i = array.size(fvg_boxes) - 1 to 0
+        d = array.get(fvg_dirs, i)
+        t = array.get(fvg_tops, i)
+        b = array.get(fvg_bots, i)
+        filled = d == 1 ? low <= b : high >= t
+        if filled
+            box.delete(array.get(fvg_boxes, i))
+            array.remove(fvg_boxes, i)
+            array.remove(fvg_tops, i)
+            array.remove(fvg_bots, i)
+            array.remove(fvg_dirs, i)
+
+// ═══════════════════════════════════════════════════════════════
+//  SMC: LIQUIDITY SWEEP CHECK
+// ═══════════════════════════════════════════════════════════════
+
+if use_smc and show_liq and show_sweep and array.size(liq_lines) > 0
+    for i = array.size(liq_lines) - 1 to 0
+        p = array.get(liq_prices, i)
+        d = array.get(liq_dirs, i)
+        if d == 1 and high > p and close < p
+            sweep_bull := true
+            label.new(bar_index, high, "SWEEP", style = label.style_label_down,
+                 color = col_liq, textcolor = color.white, size = size.tiny)
+            line.delete(array.get(liq_lines, i))
+            array.remove(liq_lines, i)
+            array.remove(liq_prices, i)
+            array.remove(liq_dirs, i)
+        else if d == -1 and low < p and close > p
+            sweep_bear := true
+            label.new(bar_index, low, "SWEEP", style = label.style_label_up,
+                 color = col_liq, textcolor = color.white, size = size.tiny)
+            line.delete(array.get(liq_lines, i))
+            array.remove(liq_lines, i)
+            array.remove(liq_prices, i)
+            array.remove(liq_dirs, i)
+
+// ═══════════════════════════════════════════════════════════════
+//  SMC: BOS / CHOCH DETECTION
+// ═══════════════════════════════════════════════════════════════
+
+if use_smc and barstate.isconfirmed
+    // Bullish: close пробивает ключевой swing high
+    if not na(key_sh) and not sh_broken and close > key_sh and disp_ok and mtf_bull_ok
+        sh_broken := true
+        smc_bull := true
+        if mkt_structure == -1
+            smc_is_choch_bull := true
+        else
+            smc_is_bos_bull := true
+        mkt_structure := 1
+        // Удалить линию swing high (пробита)
+        if not na(swing_h_line)
+            line.delete(swing_h_line)
+            swing_h_line := na
+    // Bearish: close пробивает ключевой swing low
+    if not na(key_sl) and not sl_broken and close < key_sl and disp_ok and mtf_bear_ok
+        sl_broken := true
+        smc_bear := true
+        if mkt_structure == 1
+            smc_is_choch_bear := true
+        else
+            smc_is_bos_bear := true
+        mkt_structure := -1
+        if not na(swing_l_line)
+            line.delete(swing_l_line)
+            swing_l_line := na
+
+// ═══════════════════════════════════════════════════════════════
+//  SMC: ORDER BLOCK CREATION (при BOS/CHOCH)
+// ═══════════════════════════════════════════════════════════════
+
+if use_smc and show_ob
+    // Bullish OB: последняя медвежья свеча перед бычьим импульсом
+    if smc_bull
+        for j = 1 to ob_lookback
+            if close[j] < open[j]
+                if array.size(ob_boxes) >= ob_max
+                    box.delete(array.shift(ob_boxes))
+                    array.shift(ob_tops)
+                    array.shift(ob_bots)
+                    array.shift(ob_dirs)
+                bx = box.new(bar_index - j, high[j], bar_index + 30, low[j],
+                     bgcolor = col_ob_bull, border_color = col_sup, border_width = 1)
+                array.push(ob_boxes, bx)
+                array.push(ob_tops, high[j])
+                array.push(ob_bots, low[j])
+                array.push(ob_dirs, 1)
+                break
+    // Bearish OB: последняя бычья свеча перед медвежьим импульсом
+    if smc_bear
+        for j = 1 to ob_lookback
+            if close[j] > open[j]
+                if array.size(ob_boxes) >= ob_max
+                    box.delete(array.shift(ob_boxes))
+                    array.shift(ob_tops)
+                    array.shift(ob_bots)
+                    array.shift(ob_dirs)
+                bx = box.new(bar_index - j, high[j], bar_index + 30, low[j],
+                     bgcolor = col_ob_bear, border_color = col_res, border_width = 1)
+                array.push(ob_boxes, bx)
+                array.push(ob_tops, high[j])
+                array.push(ob_bots, low[j])
+                array.push(ob_dirs, -1)
+                break
+
+// ═══════════════════════════════════════════════════════════════
+//  SMC: FVG DETECTION (каждый подтверждённый бар)
+// ═══════════════════════════════════════════════════════════════
+
+if use_smc and show_fvg and barstate.isconfirmed and bar_index > 2
+    // Bullish FVG: low текущего > high 2 бара назад (gap up)
+    if low > high[2]
+        if array.size(fvg_boxes) >= fvg_max
+            box.delete(array.shift(fvg_boxes))
+            array.shift(fvg_tops)
+            array.shift(fvg_bots)
+            array.shift(fvg_dirs)
+        ft = low
+        fb = high[2]
+        bx = box.new(bar_index - 2, ft, bar_index + 20, fb,
+             bgcolor = col_fvg_bull, border_color = color.new(col_sup, 70), border_width = 1)
+        array.push(fvg_boxes, bx)
+        array.push(fvg_tops, ft)
+        array.push(fvg_bots, fb)
+        array.push(fvg_dirs, 1)
+    // Bearish FVG: high текущего < low 2 бара назад (gap down)
+    if high < low[2]
+        if array.size(fvg_boxes) >= fvg_max
+            box.delete(array.shift(fvg_boxes))
+            array.shift(fvg_tops)
+            array.shift(fvg_bots)
+            array.shift(fvg_dirs)
+        ft = low[2]
+        fb = high
+        bx = box.new(bar_index - 2, ft, bar_index + 20, fb,
+             bgcolor = col_fvg_bear, border_color = color.new(col_res, 70), border_width = 1)
+        array.push(fvg_boxes, bx)
+        array.push(fvg_tops, ft)
+        array.push(fvg_bots, fb)
+        array.push(fvg_dirs, -1)
+
+// ═══════════════════════════════════════════════════════════════
+//  SMC: LIQUIDITY DETECTION (equal highs / equal lows)
+// ═══════════════════════════════════════════════════════════════
+
+if use_smc and show_liq and not na(atr)
+    // Equal Highs: текущий SH ≈ предыдущий SH
+    if not na(pivot_h) and not na(prev_sh_price) and not na(key_sh)
+        eq_thresh = atr * eq_atr_pct
+        if math.abs(key_sh - prev_sh_price) < eq_thresh
+            if array.size(liq_lines) >= liq_max
+                line.delete(array.shift(liq_lines))
+                array.shift(liq_prices)
+                array.shift(liq_dirs)
+            avg_p = (key_sh + prev_sh_price) / 2.0
+            ln = line.new(key_sh_bar, avg_p, bar_index, avg_p,
+                 color = col_liq, style = line.style_dotted, width = 2)
+            array.push(liq_lines, ln)
+            array.push(liq_prices, avg_p)
+            array.push(liq_dirs, 1)
+    // Equal Lows: текущий SL ≈ предыдущий SL
+    if not na(pivot_l) and not na(prev_sl_price) and not na(key_sl)
+        eq_thresh = atr * eq_atr_pct
+        if math.abs(key_sl - prev_sl_price) < eq_thresh
+            if array.size(liq_lines) >= liq_max
+                line.delete(array.shift(liq_lines))
+                array.shift(liq_prices)
+                array.shift(liq_dirs)
+            avg_p = (key_sl + prev_sl_price) / 2.0
+            ln = line.new(key_sl_bar, avg_p, bar_index, avg_p,
+                 color = col_liq, style = line.style_dotted, width = 2)
+            array.push(liq_lines, ln)
+            array.push(liq_prices, avg_p)
+            array.push(liq_dirs, -1)
+
+// ═══════════════════════════════════════════════════════════════
+//  SMC: SWING LEVEL LINES + BOX EXTENSION
+// ═══════════════════════════════════════════════════════════════
+
+if use_smc and show_swing_lvl
+    // Swing High line
+    if not na(key_sh) and not sh_broken
+        if na(swing_h_line)
+            swing_h_line := line.new(key_sh_bar, key_sh, bar_index, key_sh,
+                 color = color.new(col_res, 30), style = line.style_dashed, width = 1)
+        else
+            line.set_x2(swing_h_line, bar_index)
+    else if not na(swing_h_line)
+        line.delete(swing_h_line)
+        swing_h_line := na
+    // Swing Low line
+    if not na(key_sl) and not sl_broken
+        if na(swing_l_line)
+            swing_l_line := line.new(key_sl_bar, key_sl, bar_index, key_sl,
+                 color = color.new(col_sup, 30), style = line.style_dashed, width = 1)
+        else
+            line.set_x2(swing_l_line, bar_index)
+    else if not na(swing_l_line)
+        line.delete(swing_l_line)
+        swing_l_line := na
+
+// Extend OB boxes
+if use_smc and show_ob and array.size(ob_boxes) > 0
+    for i = 0 to array.size(ob_boxes) - 1
+        box.set_right(array.get(ob_boxes, i), bar_index + 5)
+
+// Extend FVG boxes
+if use_smc and show_fvg and array.size(fvg_boxes) > 0
+    for i = 0 to array.size(fvg_boxes) - 1
+        box.set_right(array.get(fvg_boxes, i), bar_index + 5)
+
+// Extend Liquidity lines
+if use_smc and show_liq and array.size(liq_lines) > 0
+    for i = 0 to array.size(liq_lines) - 1
+        line.set_x2(array.get(liq_lines, i), bar_index + 5)
 
 // ═══════════════════════════════════════════════════════════════
 //  МЕДЛЕННЫЕ: ОБНАРУЖЕНИЕ ПРОБОЯ
@@ -522,7 +908,7 @@ else if pend_bull_key >= 0 and bar_index > pend_bull_lb and barstate.isconfirmed
     pend_bull_lb  := -1
 
 // ═══════════════════════════════════════════════════════════════
-//  БЫСТРЫЕ ЛИНИИ: ОБНАРУЖЕНИЕ ПРОБОЯ (мгновенно)
+//  БЫСТРЫЕ ЛИНИИ: ОБНАРУЖЕНИЕ ПРОБОЯ
 // ═══════════════════════════════════════════════════════════════
 
 if use_fast and fast_len < swing_len
@@ -550,6 +936,7 @@ if use_fast and fast_len < swing_len
 //  ОТРИСОВКА СИГНАЛОВ
 // ═══════════════════════════════════════════════════════════════
 
+// Trendline breaks
 plotshape(bull_break, title = "Bull Break", style = shape.labelup, location = location.belowbar,
      color = #00BFA5, textcolor = color.white, text = "BREAK UP", size = size.normal)
 
@@ -571,11 +958,47 @@ plotshape(show_tent and bear_tent and not bear_break, title = "Bear Tent", style
 bgcolor(bull_break and not bear_break and show_bg ? bg_up : na, title = "Bull BG")
 bgcolor(bear_break and not bull_break and show_bg ? bg_dn : na, title = "Bear BG")
 
+// SMC: BOS signals
+plotshape(use_smc and show_bos and smc_is_bos_bull, title = "BOS Bull", style = shape.labelup,
+     location = location.belowbar, color = col_bos, textcolor = color.white, text = "BOS", size = size.small)
+
+plotshape(use_smc and show_bos and smc_is_bos_bear, title = "BOS Bear", style = shape.labeldown,
+     location = location.abovebar, color = col_bos, textcolor = color.white, text = "BOS", size = size.small)
+
+// SMC: CHOCH signals
+plotshape(use_smc and show_choch and smc_is_choch_bull, title = "CHOCH Bull", style = shape.labelup,
+     location = location.belowbar, color = col_choch, textcolor = color.white, text = "CHOCH", size = size.normal)
+
+plotshape(use_smc and show_choch and smc_is_choch_bear, title = "CHOCH Bear", style = shape.labeldown,
+     location = location.abovebar, color = col_choch, textcolor = color.white, text = "CHOCH", size = size.normal)
+
+// SMC: Displacement marker
+plotshape(use_smc and is_displacement and close > open, title = "Disp Bull",
+     style = shape.diamond, location = location.belowbar, color = color.new(col_bos, 60), size = size.tiny)
+plotshape(use_smc and is_displacement and close < open, title = "Disp Bear",
+     style = shape.diamond, location = location.abovebar, color = color.new(col_choch, 60), size = size.tiny)
+
+// ═══════════════════════════════════════════════════════════════
+//  PREMIUM / DISCOUNT ZONES
+// ═══════════════════════════════════════════════════════════════
+
+pd_high = key_sh
+pd_low  = key_sl
+pd_mid  = not na(pd_high) and not na(pd_low) ? (pd_high + pd_low) / 2.0 : na
+
+in_premium  = not na(pd_mid) and close > pd_mid
+in_discount = not na(pd_mid) and close < pd_mid
+
+bgcolor(use_smc and show_pd and in_premium ? col_premium : na, title = "Premium Zone")
+bgcolor(use_smc and show_pd and in_discount ? col_discount : na, title = "Discount Zone")
+plot(use_smc and show_pd and not na(pd_mid) ? pd_mid : na, "Equilibrium",
+     color = color.new(color.gray, 50), style = plot.style_cross)
+
 // ═══════════════════════════════════════════════════════════════
 //  ИНФОРМАЦИОННАЯ ПАНЕЛЬ
 // ═══════════════════════════════════════════════════════════════
 
-var table tbl = table.new(position.top_right, 2, 8,
+var table tbl = table.new(position.top_right, 2, 12,
      bgcolor = color.new(#1E1E1E, 10), border_color = color.new(color.gray, 60), border_width = 1)
 
 if barstate.islast
@@ -596,7 +1019,7 @@ if barstate.islast
             if na(br) or p < br
                 br := p
 
-    table.cell(tbl, 0, 0, "TBD v6", text_color = color.white, text_size = size.small)
+    table.cell(tbl, 0, 0, "TBD v6+SMC", text_color = color.white, text_size = size.small)
     table.cell(tbl, 1, 0, barstate.isrealtime ? "LIVE" : "HIST", text_color = barstate.isrealtime ? #00BFA5 : color.gray, text_size = size.small)
 
     table.cell(tbl, 0, 1, "Lines", text_color = color.gray, text_size = size.small)
@@ -625,10 +1048,30 @@ if barstate.islast
     string vp = vp_active ? str.tostring(math.round(vol_pct * 100)) + "%" : (use_vol_proj ? "ON" : "OFF")
     table.cell(tbl, 1, 7, vp, text_color = vp_active ? color.yellow : color.gray, text_size = size.small)
 
+    // SMC rows
+    table.cell(tbl, 0, 8, "Structure", text_color = color.gray, text_size = size.small)
+    string struct_txt = mkt_structure == 1 ? "BULL" : mkt_structure == -1 ? "BEAR" : "---"
+    color  struct_col = mkt_structure == 1 ? col_sup : mkt_structure == -1 ? col_res : color.gray
+    table.cell(tbl, 1, 8, use_smc ? struct_txt : "OFF", text_color = use_smc ? struct_col : color.gray, text_size = size.small)
+
+    table.cell(tbl, 0, 9, "Key SH", text_color = color.gray, text_size = size.small)
+    table.cell(tbl, 1, 9, use_smc and not na(key_sh) ? str.tostring(key_sh, format.mintick) + (sh_broken ? " X" : "") : "---",
+         text_color = sh_broken ? color.gray : col_res, text_size = size.small)
+
+    table.cell(tbl, 0, 10, "Key SL", text_color = color.gray, text_size = size.small)
+    table.cell(tbl, 1, 10, use_smc and not na(key_sl) ? str.tostring(key_sl, format.mintick) + (sl_broken ? " X" : "") : "---",
+         text_color = sl_broken ? color.gray : col_sup, text_size = size.small)
+
+    table.cell(tbl, 0, 11, "Zone", text_color = color.gray, text_size = size.small)
+    string zone_txt = not use_smc or na(pd_mid) ? "---" : in_premium ? "PREMIUM" : in_discount ? "DISCOUNT" : "EQ"
+    color  zone_col = not use_smc or na(pd_mid) ? color.gray : in_premium ? col_res : in_discount ? col_sup : color.gray
+    table.cell(tbl, 1, 11, zone_txt, text_color = zone_col, text_size = size.small)
+
 // ═══════════════════════════════════════════════════════════════
 //  АЛЕРТЫ
 // ═══════════════════════════════════════════════════════════════
 
+// Trendline break alerts
 alertcondition(bull_break and alr_bull, "Bullish Break",
      "Bullish break on {{ticker}} {{interval}} at {{close}}")
 
@@ -643,3 +1086,19 @@ alertcondition((fast_bull or fast_bear) and alr_fast and not bull_break and not 
 
 alertcondition(((bull_tent and not bull_break) or (bear_tent and not bear_break)) and alr_tent, "Tentative Break",
      "Tentative on {{ticker}} {{interval}} at {{close}}")
+
+// SMC alerts
+alertcondition((smc_is_bos_bull or smc_is_bos_bear) and alr_bos, "BOS",
+     "BOS on {{ticker}} {{interval}} at {{close}}")
+
+alertcondition((smc_is_choch_bull or smc_is_choch_bear) and alr_choch, "CHOCH",
+     "CHOCH on {{ticker}} {{interval}} at {{close}}")
+
+alertcondition((sweep_bull or sweep_bear) and alr_sweep, "Liquidity Sweep",
+     "Liquidity sweep on {{ticker}} {{interval}} at {{close}}")
+
+alertcondition(smc_is_choch_bull and alr_choch, "CHOCH Bullish",
+     "Bullish CHOCH on {{ticker}} {{interval}} at {{close}}")
+
+alertcondition(smc_is_choch_bear and alr_choch, "CHOCH Bearish",
+     "Bearish CHOCH on {{ticker}} {{interval}} at {{close}}")
