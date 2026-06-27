@@ -66,8 +66,11 @@ bool   show_sfp  = input.bool(true, "Show SFP (Swing Failure)", group = GRP_SMC,
      tooltip = "Тень пробивает swing level, но close возвращается.")
 bool   show_div  = input.bool(true, "Show Divergence at Pivots", group = GRP_SMC,
      tooltip = "RSI-дивергенция: цена HH но RSI LH (медвежья), цена LL но RSI HL (бычья).")
-color  col_bos   = input.color(#2962FF, "BOS Color", group = GRP_SMC)
-color  col_choch = input.color(#E040FB, "CHOCH Color", group = GRP_SMC)
+color  col_bos_bull  = input.color(#26A69A, "BOS Bull Color", group = GRP_SMC)
+color  col_bos_bear  = input.color(#EF5350, "BOS Bear Color", group = GRP_SMC)
+color  col_choch_bull = input.color(#00C853, "CHOCH Bull Color", group = GRP_SMC)
+color  col_choch_bear = input.color(#FF1744, "CHOCH Bear Color", group = GRP_SMC)
+bool   show_disp_markers = input.bool(false, "Show Displacement Diamonds", group = GRP_SMC)
 float  smc_min_swing = input.float(0.5, "Min Swing Size (ATR x)", minval = 0.0, step = 0.1, group = GRP_SMC,
      tooltip = "Мин. размах свинга для BOS/CHOCH. 0=любой. Фильтрует шум в рейндже.")
 int    smc_min_conf  = input.int(2, "Min Confluence for Labels", minval = 0, maxval = 5, group = GRP_SMC,
@@ -85,16 +88,16 @@ int    ob_lookback = input.int(10, "OB Lookback Bars", minval = 3, maxval = 30, 
 bool   ob_mitigate = input.bool(true, "Remove Mitigated OBs", group = GRP_OB)
 bool   ob_use_body = input.bool(false, "OB: Use Body Only (refine)", group = GRP_OB)
 bool   show_breaker = input.bool(true, "Show Breaker Blocks", group = GRP_OB)
-color  col_ob_bull = input.color(color.new(#00BFA5, 80), "Bullish OB Color", group = GRP_OB)
-color  col_ob_bear = input.color(color.new(#FF1744, 80), "Bearish OB Color", group = GRP_OB)
+color  col_ob_bull = input.color(color.new(#26A69A, 90), "Bullish OB Color", group = GRP_OB)
+color  col_ob_bear = input.color(color.new(#EF5350, 90), "Bearish OB Color", group = GRP_OB)
 
 string GRP_FVG   = "══ Fair Value Gaps ══"
 bool   show_fvg  = input.bool(true, "Show FVG Zones", group = GRP_FVG)
 int    fvg_max   = input.int(5, "Max Active FVGs", minval = 1, maxval = 20, group = GRP_FVG)
 bool   fvg_remove_filled = input.bool(true, "Remove Filled FVGs", group = GRP_FVG)
 float  fvg_min_atr = input.float(0.2, "FVG Min Size (ATR x)", minval = 0.0, step = 0.05, group = GRP_FVG)
-color  col_fvg_bull = input.color(color.new(#00BFA5, 85), "Bullish FVG Color", group = GRP_FVG)
-color  col_fvg_bear = input.color(color.new(#FF1744, 85), "Bearish FVG Color", group = GRP_FVG)
+color  col_fvg_bull = input.color(color.new(#26A69A, 90), "Bullish FVG Color", group = GRP_FVG)
+color  col_fvg_bear = input.color(color.new(#EF5350, 90), "Bearish FVG Color", group = GRP_FVG)
 
 string GRP_LIQ   = "══ Liquidity ══"
 bool   show_liq  = input.bool(true, "Show Equal H/L Liquidity", group = GRP_LIQ)
@@ -882,11 +885,11 @@ if use_smc and show_sfp and barstate.isconfirmed
     if not na(key_sh) and not sh_broken and high > key_sh and close < key_sh
         sfp_bear := true
         label.new(bar_index, high, "SFP", style = label.style_label_down,
-             color = color.new(col_res, 40), textcolor = color.white, size = size.small)
+             color = color.new(col_res, 40), textcolor = color.white, size = size.tiny)
     if not na(key_sl) and not sl_broken and low < key_sl and close > key_sl
         sfp_bull := true
         label.new(bar_index, low, "SFP", style = label.style_label_up,
-             color = color.new(col_sup, 40), textcolor = color.white, size = size.small)
+             color = color.new(col_sup, 40), textcolor = color.white, size = size.tiny)
 
 // ═══════════════════════════════════════════════════════════════
 //  SMC: BOS / CHOCH DETECTION
@@ -1482,16 +1485,16 @@ if use_fast and fast_len < eff_swing_len
 // ═══════════════════════════════════════════════════════════════
 
 plotshape(bull_break, title = "Bull Break", style = shape.labelup, location = location.belowbar,
-     color = #00BFA5, textcolor = color.white, text = "BREAK UP", size = size.normal)
+     color = #26A69A, textcolor = color.white, text = "BREAK UP", size = size.small)
 
 plotshape(bear_break, title = "Bear Break", style = shape.labeldown, location = location.abovebar,
-     color = #FF1744, textcolor = color.white, text = "BREAK DN", size = size.normal)
+     color = #EF5350, textcolor = color.white, text = "BREAK DN", size = size.small)
 
 plotshape(show_fast and fast_bull and not bull_break, title = "Fast Bull", style = shape.labelup,
-     location = location.belowbar, color = #2979FF, textcolor = color.white, text = "FAST UP", size = size.small)
+     location = location.belowbar, color = color.new(#26A69A, 30), textcolor = color.white, text = "FAST UP", size = size.tiny)
 
 plotshape(show_fast and fast_bear and not bear_break, title = "Fast Bear", style = shape.labeldown,
-     location = location.abovebar, color = #FF9100, textcolor = color.white, text = "FAST DN", size = size.small)
+     location = location.abovebar, color = color.new(#EF5350, 30), textcolor = color.white, text = "FAST DN", size = size.tiny)
 
 plotshape(show_tent and bull_tent and not bull_break, title = "Bull Tent", style = shape.triangleup,
      location = location.belowbar, color = color.new(#00BFA5, 50), size = size.small)
@@ -1505,21 +1508,21 @@ bgcolor(bear_break and not bull_break and show_bg ? bg_dn : na, title = "Bear BG
 // BOS/CHOCH labels with confluence
 if use_smc and show_bos and smc_is_bos_bull and conf_bull >= smc_min_conf
     label.new(bar_index, low, "BOS " + str.tostring(conf_bull) + "/5",
-         style = label.style_label_up, color = col_bos, textcolor = color.white, size = size.small)
+         style = label.style_label_up, color = col_bos_bull, textcolor = color.white, size = size.tiny)
 if use_smc and show_bos and smc_is_bos_bear and conf_bear >= smc_min_conf
     label.new(bar_index, high, "BOS " + str.tostring(conf_bear) + "/5",
-         style = label.style_label_down, color = col_bos, textcolor = color.white, size = size.small)
+         style = label.style_label_down, color = col_bos_bear, textcolor = color.white, size = size.tiny)
 if use_smc and show_choch and smc_is_choch_bull and conf_bull >= smc_min_conf
     label.new(bar_index, low, "CHOCH " + str.tostring(conf_bull) + "/5",
-         style = label.style_label_up, color = col_choch, textcolor = color.white, size = size.normal)
+         style = label.style_label_up, color = col_choch_bull, textcolor = color.white, size = size.small)
 if use_smc and show_choch and smc_is_choch_bear and conf_bear >= smc_min_conf
     label.new(bar_index, high, "CHOCH " + str.tostring(conf_bear) + "/5",
-         style = label.style_label_down, color = col_choch, textcolor = color.white, size = size.normal)
+         style = label.style_label_down, color = col_choch_bear, textcolor = color.white, size = size.small)
 
-plotshape(use_smc and is_displacement and close > open, title = "Disp Bull",
-     style = shape.diamond, location = location.belowbar, color = color.new(col_bos, 60), size = size.tiny)
-plotshape(use_smc and is_displacement and close < open, title = "Disp Bear",
-     style = shape.diamond, location = location.abovebar, color = color.new(col_choch, 60), size = size.tiny)
+plotshape(use_smc and show_disp_markers and is_displacement and close > open, title = "Disp Bull",
+     style = shape.diamond, location = location.belowbar, color = color.new(col_sup, 60), size = size.tiny)
+plotshape(use_smc and show_disp_markers and is_displacement and close < open, title = "Disp Bear",
+     style = shape.diamond, location = location.abovebar, color = color.new(col_res, 60), size = size.tiny)
 
 // ═══════════════════════════════════════════════════════════════
 //  PREMIUM / DISCOUNT + KILL ZONES + CANDLE COLORING
@@ -1542,7 +1545,7 @@ barcolor(use_candle_color ?
 // ═══════════════════════════════════════════════════════════════
 
 var table tbl = table.new(position.top_right, 2, 18,
-     bgcolor = color.new(#1E1E1E, 10), border_color = color.new(color.gray, 60), border_width = 1)
+     bgcolor = color.new(#1A1A2E, 20), border_color = color.new(color.gray, 70), border_width = 1)
 
 if barstate.islast
     sc = array.size(sup_pool)
@@ -1642,7 +1645,7 @@ if barstate.islast
 // ═══════════════════════════════════════════════════════════════
 
 var table tbl2 = table.new(position.bottom_right, 3, 3,
-     bgcolor = color.new(#1E1E1E, 10), border_color = color.new(color.gray, 60), border_width = 1)
+     bgcolor = color.new(#1A1A2E, 20), border_color = color.new(color.gray, 70), border_width = 1)
 
 if show_multi and barstate.islast
     table.cell(tbl2, 0, 0, "Символ", text_color = color.gray, text_size = size.small)
