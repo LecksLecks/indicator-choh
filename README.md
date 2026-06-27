@@ -70,7 +70,7 @@ color  col_bos   = input.color(#2962FF, "BOS Color", group = GRP_SMC)
 color  col_choch = input.color(#E040FB, "CHOCH Color", group = GRP_SMC)
 float  smc_min_swing = input.float(0.5, "Min Swing Size (ATR x)", minval = 0.0, step = 0.1, group = GRP_SMC,
      tooltip = "Мин. размах свинга для BOS/CHOCH. 0=любой. Фильтрует шум в рейндже.")
-int    smc_min_conf  = input.int(0, "Min Confluence for Labels", minval = 0, maxval = 5, group = GRP_SMC,
+int    smc_min_conf  = input.int(2, "Min Confluence for Labels", minval = 0, maxval = 5, group = GRP_SMC,
      tooltip = "BOS/CHOCH лейблы только при confluence >= этого значения. 0=все.")
 
 string GRP_DISP  = "══ Displacement ══"
@@ -137,7 +137,11 @@ string GRP_SIGNAL = "══ Composite Signal ══"
 bool   show_ote  = input.bool(true, "Show OTE Zone (Fib 0.618-0.786)", group = GRP_SIGNAL,
      tooltip = "Optimal Trade Entry — зона отката по Фибоначчи после BOS/CHOCH.")
 bool   show_composite = input.bool(true, "Show Composite BUY/SELL", group = GRP_SIGNAL)
-int    composite_min_conf = input.int(3, "Min Confluence for Signal", minval = 1, maxval = 5, group = GRP_SIGNAL)
+int    composite_min_conf = input.int(2, "Min Confluence for Signal", minval = 1, maxval = 5, group = GRP_SIGNAL)
+float  tp_atr_mul = input.float(2.5, "TP ATR Multiplier", minval = 0.5, step = 0.5, group = GRP_SIGNAL,
+     tooltip = "TP = entry ± ATR × этот множитель. Реалистичнее чем key_sh/key_sl на старших ТФ.")
+float  sl_atr_buf_mul = input.float(1.0, "SL ATR Buffer", minval = 0.1, step = 0.1, group = GRP_SIGNAL,
+     tooltip = "Буфер под/над OTE зоной для SL. Больше = меньше стоп-аутов.")
 int    composite_cooldown = input.int(10, "Signal Cooldown (bars)", minval = 1, maxval = 100, group = GRP_SIGNAL,
      tooltip = "Мин. баров между composite-сигналами. Снижает частоту сигналов.")
 bool   show_sltp = input.bool(true, "Show SL/TP Lines", group = GRP_SIGNAL)
@@ -361,6 +365,7 @@ var bool  bt_in_trade = false
 var float bt_last_rr = 0.0
 var float bt_sum_rr = 0.0
 var int   last_composite_bar = -1000
+var bool  bt_trailed = false
 
 // Sessions
 var float asian_hi = na
@@ -1194,23 +1199,49 @@ int confluence = mkt_structure == 1 ? conf_bull : mkt_structure == -1 ? conf_bea
 //  COMPOSITE SIGNAL + SL/TP + BACKTEST
 // ═══════════════════════════════════════════════════════════════
 
-// Backtest exit check (before new entries)
+// Backtest exit check + trailing stop (before new entries)
 if bt_in_trade
     if bt_dir == 1
+        // Trailing: move SL to breakeven after 1.5R profit
+        if not bt_trailed and not na(bt_entry) and not na(bt_sl)
+            float be_level = bt_entry + (bt_entry - bt_sl) * 1.5
+            if high >= be_level
+                bt_sl := bt_entry
+                bt_trailed := true
+                if show_sltp and not na(sl_line)
+                    line.set_y1(sl_line, bt_sl)
+                    line.set_y2(sl_line, bt_sl)
         if high >= bt_tp
             bt_wins += 1
             bt_sum_rr += bt_last_rr
             bt_in_trade := false
         else if low <= bt_sl
-            bt_losses += 1
+            if bt_trailed
+                bt_wins += 1
+                bt_sum_rr += 0.5
+            else
+                bt_losses += 1
             bt_in_trade := false
     else if bt_dir == -1
+        // Trailing: move SL to breakeven after 1.5R profit
+        if not bt_trailed and not na(bt_entry) and not na(bt_sl)
+            float be_level = bt_entry - (bt_sl - bt_entry) * 1.5
+            if low <= be_level
+                bt_sl := bt_entry
+                bt_trailed := true
+                if show_sltp and not na(sl_line)
+                    line.set_y1(sl_line, bt_sl)
+                    line.set_y2(sl_line, bt_sl)
         if low <= bt_tp
             bt_wins += 1
             bt_sum_rr += bt_last_rr
             bt_in_trade := false
         else if high >= bt_sl
-            bt_losses += 1
+            if bt_trailed
+                bt_wins += 1
+                bt_sum_rr += 0.5
+            else
+                bt_losses += 1
             bt_in_trade := false
 
 // Clean SL/TP lines when trade exits
@@ -1236,10 +1267,11 @@ if use_smc and show_composite and barstate.isconfirmed and not bt_in_trade and n
             ote_buy_fired := true
             last_composite_bar := bar_index
             bt_entry := close
-            // SL: below OTE zone bottom (or nearest OB bottom) + ATR buffer; TP: key_sh
-            float sl_atr_buf = not na(atr) ? atr * 0.3 : close * 0.003
+            // SL: below OTE zone bottom + ATR buffer; TP: ATR-based
+            float sl_atr_buf = not na(atr) ? atr * sl_atr_buf_mul : close * 0.01
             bt_sl := show_ote and not na(ote_bot_price) ? ote_bot_price - sl_atr_buf : (near_ob_bull and array.size(ob_bots) > 0 ? array.get(ob_bots, array.size(ob_bots) - 1) - sl_atr_buf : (not na(key_sl) ? key_sl : close - (not na(atr) ? atr * 1.5 : close * 0.015)))
-            bt_tp := not na(key_sh) ? key_sh : close + (not na(atr) ? atr * 3 : close * 0.03)
+            bt_tp := close + (not na(atr) ? atr * tp_atr_mul : close * 0.025)
+            bt_trailed := false
             float denom = bt_entry - bt_sl
             bt_last_rr := denom > 0 ? (bt_tp - bt_entry) / denom : 1.0
             bt_dir := 1
@@ -1260,10 +1292,11 @@ if use_smc and show_composite and barstate.isconfirmed and not bt_in_trade and n
             ote_sell_fired := true
             last_composite_bar := bar_index
             bt_entry := close
-            // SL: above OTE zone top (or nearest OB top) + ATR buffer; TP: key_sl
-            float sl_atr_buf = not na(atr) ? atr * 0.3 : close * 0.003
+            // SL: above OTE zone top + ATR buffer; TP: ATR-based
+            float sl_atr_buf = not na(atr) ? atr * sl_atr_buf_mul : close * 0.01
             bt_sl := show_ote and not na(ote_top_price) ? ote_top_price + sl_atr_buf : (near_ob_bear and array.size(ob_tops) > 0 ? array.get(ob_tops, array.size(ob_tops) - 1) + sl_atr_buf : (not na(key_sh) ? key_sh : close + (not na(atr) ? atr * 1.5 : close * 0.015)))
-            bt_tp := not na(key_sl) ? key_sl : close - (not na(atr) ? atr * 3 : close * 0.03)
+            bt_tp := close - (not na(atr) ? atr * tp_atr_mul : close * 0.025)
+            bt_trailed := false
             float denom = bt_sl - bt_entry
             bt_last_rr := denom > 0 ? (bt_entry - bt_tp) / denom : 1.0
             bt_dir := -1
