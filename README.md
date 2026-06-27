@@ -137,13 +137,15 @@ string GRP_SIGNAL = "══ Composite Signal ══"
 bool   show_ote  = input.bool(true, "Show OTE Zone (Fib 0.618-0.786)", group = GRP_SIGNAL,
      tooltip = "Optimal Trade Entry — зона отката по Фибоначчи после BOS/CHOCH.")
 bool   show_composite = input.bool(true, "Show Composite BUY/SELL", group = GRP_SIGNAL)
-int    composite_min_conf = input.int(2, "Min Confluence for Signal", minval = 1, maxval = 5, group = GRP_SIGNAL)
+int    composite_min_conf = input.int(3, "Min Confluence for Signal", minval = 1, maxval = 5, group = GRP_SIGNAL)
 float  tp_atr_mul = input.float(2.5, "TP ATR Multiplier", minval = 0.5, step = 0.5, group = GRP_SIGNAL,
      tooltip = "TP = entry ± ATR × этот множитель. Реалистичнее чем key_sh/key_sl на старших ТФ.")
 float  sl_atr_buf_mul = input.float(1.0, "SL ATR Buffer", minval = 0.1, step = 0.1, group = GRP_SIGNAL,
      tooltip = "Буфер под/над OTE зоной для SL. Больше = меньше стоп-аутов.")
-int    composite_cooldown = input.int(10, "Signal Cooldown (bars)", minval = 1, maxval = 100, group = GRP_SIGNAL,
-     tooltip = "Мин. баров между composite-сигналами. Снижает частоту сигналов.")
+int    composite_cooldown = input.int(0, "Signal Cooldown (0=auto)", minval = 0, maxval = 100, group = GRP_SIGNAL,
+     tooltip = "0=авто (15m=8, 1H=5, 4H=10, 1D=15). Мин. баров между сигналами.")
+bool   require_htf_align = input.bool(true, "Require HTF Trend Alignment", group = GRP_SIGNAL,
+     tooltip = "Буль только при HTF тренде вверх, селл только при HTF тренде вниз. Фильтрует противотрендовые входы.")
 bool   show_sltp = input.bool(true, "Show SL/TP Lines", group = GRP_SIGNAL)
 bool   show_stats = input.bool(true, "Show Backtest Stats", group = GRP_SIGNAL)
 
@@ -1257,10 +1259,16 @@ if not bt_in_trade and show_sltp
 bool in_ote_buy  = ote_dir == 1 and not na(ote_top_price) and not na(ote_bot_price) and close <= ote_top_price and close >= ote_bot_price
 bool in_ote_sell = ote_dir == -1 and not na(ote_top_price) and not na(ote_bot_price) and close >= ote_bot_price and close <= ote_top_price
 
-bool cd_ok = bar_index - last_composite_bar >= composite_cooldown
+// Auto-scale cooldown and TP by timeframe
+int eff_cooldown = composite_cooldown > 0 ? composite_cooldown : (tf_secs >= 86400 ? 15 : tf_secs >= 14400 ? 10 : tf_secs >= 3600 ? 5 : 8)
+float eff_tp_mul = tf_secs >= 86400 ? math.max(tp_atr_mul, 3.5) : tf_secs >= 14400 ? math.max(tp_atr_mul, 3.0) : tp_atr_mul
+
+bool cd_ok = bar_index - last_composite_bar >= eff_cooldown
 
 if use_smc and show_composite and barstate.isconfirmed and not bt_in_trade and not in_no_trade and cd_ok
-    if mkt_structure == 1 and conf_bull >= composite_min_conf and not ote_buy_fired
+    bool htf_buy_ok = not require_htf_align or not use_mtf or htf_s >= 0
+    bool htf_sell_ok = not require_htf_align or not use_mtf or htf_s <= 0
+    if mkt_structure == 1 and conf_bull >= composite_min_conf and not ote_buy_fired and htf_buy_ok
         bool ote_cond = show_ote ? in_ote_buy : (near_ob_bull or near_fvg_bull or in_discount)
         if ote_cond
             composite_buy := true
@@ -1270,7 +1278,7 @@ if use_smc and show_composite and barstate.isconfirmed and not bt_in_trade and n
             // SL: below OTE zone bottom + ATR buffer; TP: ATR-based
             float sl_atr_buf = not na(atr) ? atr * sl_atr_buf_mul : close * 0.01
             bt_sl := show_ote and not na(ote_bot_price) ? ote_bot_price - sl_atr_buf : (near_ob_bull and array.size(ob_bots) > 0 ? array.get(ob_bots, array.size(ob_bots) - 1) - sl_atr_buf : (not na(key_sl) ? key_sl : close - (not na(atr) ? atr * 1.5 : close * 0.015)))
-            bt_tp := close + (not na(atr) ? atr * tp_atr_mul : close * 0.025)
+            bt_tp := close + (not na(atr) ? atr * eff_tp_mul : close * 0.025)
             bt_trailed := false
             float denom = bt_entry - bt_sl
             bt_last_rr := denom > 0 ? (bt_tp - bt_entry) / denom : 1.0
@@ -1285,7 +1293,7 @@ if use_smc and show_composite and barstate.isconfirmed and not bt_in_trade and n
             label.new(bar_index, low, "BUY\nR:R " + str.tostring(bt_last_rr, "#.#") + ":1\nConf " + str.tostring(conf_bull) + "/5",
                  style = label.style_label_up, color = col_sup, textcolor = color.white, size = size.normal)
 
-    if mkt_structure == -1 and conf_bear >= composite_min_conf and not ote_sell_fired
+    if mkt_structure == -1 and conf_bear >= composite_min_conf and not ote_sell_fired and htf_sell_ok
         bool ote_cond = show_ote ? in_ote_sell : (near_ob_bear or near_fvg_bear or in_premium)
         if ote_cond
             composite_sell := true
@@ -1295,7 +1303,7 @@ if use_smc and show_composite and barstate.isconfirmed and not bt_in_trade and n
             // SL: above OTE zone top + ATR buffer; TP: ATR-based
             float sl_atr_buf = not na(atr) ? atr * sl_atr_buf_mul : close * 0.01
             bt_sl := show_ote and not na(ote_top_price) ? ote_top_price + sl_atr_buf : (near_ob_bear and array.size(ob_tops) > 0 ? array.get(ob_tops, array.size(ob_tops) - 1) + sl_atr_buf : (not na(key_sh) ? key_sh : close + (not na(atr) ? atr * 1.5 : close * 0.015)))
-            bt_tp := close - (not na(atr) ? atr * tp_atr_mul : close * 0.025)
+            bt_tp := close - (not na(atr) ? atr * eff_tp_mul : close * 0.025)
             bt_trailed := false
             float denom = bt_sl - bt_entry
             bt_last_rr := denom > 0 ? (bt_entry - bt_tp) / denom : 1.0
